@@ -1,0 +1,6 @@
+{
+  "name": "Academic English AI Tutor",
+  "description": "An AI-powered e-learning platform for Academic English with Speech and Writing feedback using Groq API.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": []
+}

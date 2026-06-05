@@ -1,0 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@1,400;1,700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-bg-deep: #050608;
+  --color-bg-nav: #0A0C10;
+  --color-bg-panel: #111318;
+  --color-border-main: #1E2024;
+  --color-brand-blue: #3B82F6;
+  --color-brand-purple: #8B5CF6;
+  --color-text-dim: #A1A1AA;
+  --color-text-muted: #71717A;
+}
+
+@layer base {
+  body {
+    @apply bg-bg-deep text-[#E4E4E7] font-sans antialiased;
+  }
+}
+
+@layer components {
+  .sophisticated-card {
+    @apply bg-bg-panel border border-border-main rounded-lg shadow-sm;
+  }
+  
+  .nav-rail {
+    @apply h-screen border-r border-border-main bg-bg-nav flex flex-col p-6;
+  }
+
+  .btn-action {
+    @apply px-4 py-1.5 bg-brand-blue text-white text-xs font-medium rounded hover:bg-[#2563EB] transition-all active:scale-95;
+  }
+  
+  .academic-label {
+    @apply text-[10px] uppercase tracking-[0.2em] text-text-muted;
+  }
+
+  .serif-title {
+    @apply font-serif italic tracking-tight;
+  }
+
+  .input-field {
+    @apply bg-bg-nav border border-border-main rounded-lg p-4 outline-none focus:border-brand-blue/50 transition-all text-sm leading-relaxed;
+  }
+}
+

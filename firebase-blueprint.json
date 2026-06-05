@@ -1,0 +1,40 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user account information and academic profile.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "createdAt"]
+    },
+    "Submission": {
+      "title": "Academic Exercise Submission",
+      "description": "Records of writing or speaking exercises with AI feedback.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["writing", "speaking"] },
+        "content": { "type": "string" },
+        "score": { "type": "number" },
+        "feedback": { "type": "object" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "type", "content", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Private user profiles."
+    },
+    "/submissions/{submissionId}": {
+      "schema": "Submission",
+      "description": "Academic exercise history."
+    }
+  }
+}
