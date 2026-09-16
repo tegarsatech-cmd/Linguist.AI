@@ -1,206 +1,189 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, ArrowLeft, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../lib/firebase';
-import { GoogleGenAI } from '@google/genai';
-import { handleFirestoreError, OperationType } from '../lib/error-handler';
+import { evaluateWriting, RUBRIC, type WritingFeedback } from '../lib/gemini';
+import { saveWritingSubmission, type SubmissionRow } from '../lib/submissions';
+import YouTubeRecommendations from '../components/YouTubeRecommendations';
 
-interface FeedbackData {
-  score: number;
-  grammar: string;
-  coherence: string;
-  vocabulary: string;
-  suggestions: {
-    sentenceStructure: string[];
-    wordChoice: string[];
-    academicTone: string[];
-  };
-  revisedText: string;
-}
+/**
+ * Writing: input teks → Gemini (rubrik 30/20/20/15/15, temperature 0)
+ * → kategori error + koreksi + penjelasan + saran + corrected text
+ * → simpan ke Supabase → Riwayat/Progress → rekomendasi YouTube.
+ */
 
 export default function WritingExercise() {
-  const navigate = useNavigate();
   const { user } = useAuth();
   const [text, setText] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [feedback, setFeedback] = useState<FeedbackData | null>(null);
+  const [feedback, setFeedback] = useState<WritingFeedback | null>(null);
+  const [analysisError, setAnalysisError] = useState('');
+  const [savedRow, setSavedRow] = useState<SubmissionRow | null>(null);
+  const [saveError, setSaveError] = useState('');
 
   const handleAnalyze = async () => {
-    if (!text.trim() || !user) return;
+    if (!text.trim() || !user || isAnalyzing) return;
     setIsAnalyzing(true);
     setFeedback(null);
+    setAnalysisError('');
+    setSaveError('');
+    setSavedRow(null);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-      const prompt = `
-        Analisis teks esai akademik berikut dalam bahasa Indonesia:
-        "${text}"
-        
-        Berikan laporan umpan balik mendalam dalam format JSON (Gunakan bahasa Indonesia untuk semua teks umpan balik):
-        {
-          "score": number (0-100),
-          "grammar": "umpan balik spesifik tentang tata bahasa",
-          "coherence": "seberapa baik aliran ide-idenya",
-          "vocabulary": "umpan balik tentang pilihan kata",
-          "suggestions": {
-            "sentenceStructure": ["daftar 2 perbaikan spesifik untuk kompleksitas kalimat"],
-            "wordChoice": ["daftar 2 sinonim akademik atau perbaikan frasa"],
-            "academicTone": ["1-2 tips tentang nada formal"]
-          },
-          "revisedText": "versi teks dengan perbaikan"
-        }
-      `;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
-      });
-
-      const textResponse = response.text || '';
-      const data = JSON.parse(textResponse.replace(/```json|```/g, '')) as FeedbackData;
+      const data = await evaluateWriting(text); // panggilan Gemini nyata
       setFeedback(data);
 
-      // Save to Firestore
       try {
-        await addDoc(collection(db, 'submissions'), {
-          userId: user.uid,
-          type: 'writing',
-          content: text,
-          score: data.score,
-          feedback: data,
-          timestamp: serverTimestamp()
-        });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, 'submissions');
+        const row = await saveWritingSubmission(user.id, text, data);
+        setSavedRow(row);
+      } catch (e: any) {
+        console.error('Save error:', e?.message);
+        setSaveError('Hasil analisis tidak dapat disimpan ke database. Coba lagi.');
       }
-
-    } catch (error) {
-      console.error('Failed to analyze:', error);
+    } catch (e: any) {
+      console.error('Analysis error:', e?.message);
+      setAnalysisError(e?.message || 'Analisis gagal. Periksa koneksi lalu coba lagi.');
     } finally {
       setIsAnalyzing(false);
     }
   };
 
   return (
-    <div className="p-8 pb-24 max-w-7xl mx-auto space-y-8 min-h-full">
-      <header className="flex justify-between items-end">
+    <div className="p-6 md:p-10 pb-28 max-w-6xl mx-auto space-y-6 min-h-full">
+      <header className="flex flex-wrap justify-between items-end gap-4">
         <div>
-           <h2 className="academic-label mb-1">Modul Akademik</h2>
-           <h1 className="text-3xl font-serif italic text-white/90">Tes Kalimat Inggris</h1>
+          <h1 className="text-2xl font-semibold text-white/95">Tes Kalimat Inggris</h1>
+          <p className="mt-1 text-sm text-text-muted">Analisis kesalahan tata bahasa, kosakata, dan struktur dengan rubrik penilaian.</p>
         </div>
-        <div className="flex gap-3">
-           <button
-            onClick={handleAnalyze}
-            disabled={isAnalyzing || !text.trim()}
-            className="btn-action flex items-center gap-2"
-          >
-            {isAnalyzing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-            Analisis Naskah
-          </button>
-        </div>
+        <button
+          onClick={handleAnalyze}
+          disabled={isAnalyzing || !text.trim()}
+          className="btn-action flex items-center gap-2 disabled:opacity-40"
+        >
+          {isAnalyzing ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+          {isAnalyzing ? 'Menganalisis…' : 'Analisis Naskah'}
+        </button>
       </header>
 
-      <div className="flex flex-col lg:flex-row gap-8 items-start">
-        {/* Input Panel */}
-        <section className="flex-[1.5] w-full flex flex-col gap-4">
-          <div className="sophisticated-card flex-1 min-h-[500px] relative">
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              className="w-full h-full bg-transparent p-8 outline-none resize-none text-[#A1A1AA] text-sm leading-relaxed scrollbar-hide font-light"
-              placeholder="Thesis statement goes here... In this essay, I will investigate the implications of..."
-            />
-            <div className="absolute bottom-4 left-8 text-[10px] text-text-muted font-mono italic">
-              Protokol Akademik: Logika GROQ Llama-3-70B Aktif
-            </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        disabled={isAnalyzing}
+        className="w-full min-h-[220px] bg-white/[0.03] border-border-main rounded-lg p-6 outline-none resize-y text-sm text-[#E4E4E7] leading-relaxed focus:border-brand-blue/50 transition-colors"
+        placeholder="Tulis atau tempel teks bahasa Inggris di sini. Contoh: I goes to school every day."
+      />
+
+      {analysisError && (
+        <div className="flex items-start gap-2 bg-red-500/10 border-red-500/30 rounded-lg p-4">
+          <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm text-red-300">Analisis gagal: {analysisError}</p>
+            <button onClick={handleAnalyze} className="mt-1 text-xs underline text-red-200 hover:text-white">Coba lagi</button>
           </div>
-        </section>
+        </div>
+      )}
 
-        {/* AI Feedback Panel */}
-        <section className="flex-1 w-full space-y-6">
-          <AnimatePresence mode="wait">
-            {!feedback && !isAnalyzing ? (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="sophisticated-card p-10 flex flex-col items-center justify-center text-center opacity-40 border-dashed"
-              >
-                <div className="w-12 h-12 rounded-full border border-border-main flex items-center justify-center mb-4">
-                  <div className="w-2 h-2 bg-text-muted rounded-full animate-pulse" />
-                </div>
-                <p className="text-[10px] uppercase tracking-widest text-text-muted">Menunggu Masukan</p>
-              </motion.div>
-            ) : isAnalyzing ? (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="sophisticated-card p-10 flex flex-col items-center justify-center text-center"
-              >
-                <div className="w-16 h-16 border border-border-main border-t-brand-blue rounded-full animate-spin mb-6" />
-                <p className="text-sm font-medium">Memindai Integritas Struktural</p>
-                <p className="text-[10px] text-text-muted mt-2 font-mono uppercase tracking-widest">Pemetaan Wawasan Kritis AI</p>
-              </motion.div>
-            ) : (
-              <motion.div
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="space-y-6"
-              >
-                {/* Score Card */}
-                <div className="sophisticated-card p-6 bg-brand-blue/5 border-brand-blue/20">
-                   <h3 className="academic-label text-brand-blue mb-4">Skor Kohesi Akademik</h3>
-                   <div className="flex items-end gap-2">
-                      <span className="text-4xl font-serif italic">{feedback?.score}</span>
-                      <span className="text-xs text-text-muted mb-1 uppercase tracking-widest">/ benchmark 100</span>
-                   </div>
-                </div>
-
-                {/* Critical Insights */}
-                <div className="sophisticated-card p-6">
-                  <h3 className="academic-label text-brand-purple mb-6">Wawasan Kritis AI</h3>
-                  <div className="space-y-6">
-                    <div className="border-l-2 border-brand-blue pl-4 py-1">
-                      <p className="text-xs font-medium text-white/90">Fondasi Tata Bahasa</p>
-                      <p className="text-[10px] text-text-dim mt-1 leading-relaxed">{feedback?.grammar}</p>
+      {feedback && (
+        <div className="space-y-6">
+          {/* Score + Rubrik */}
+          <section className="bg-white/[0.03] border-border-main rounded-lg p-6">
+            <div className="flex items-baseline gap-3">
+              <span className="text-4xl font-semibold text-white">{feedback.score}</span>
+              <span className="text-sm text-text-muted">/ 100</span>
+            </div>
+            <p className="mt-1 text-xs text-text-muted">Skor total berdasarkan rubrik penilaian.</p>
+            <div className="mt-4 space-y-2">
+              {feedback.categories.map(cat => {
+                const max = RUBRIC.find(r => r.key === cat.name)?.weight ?? 0;
+                const pct = max > 0 ? (cat.score / max) * 100 : 0;
+                return (
+                  <div key={cat.name} className="flex items-center gap-3">
+                    <span className="w-40 shrink-0 text-xs text-text-dim">{cat.name}</span>
+                    <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                      <div className={`h-full ${pct >= 80 ? 'bg-emerald-400' : pct >= 50 ? 'bg-amber-400' : 'bg-red-400'}`} style={{ width: `${pct}%` }} />
                     </div>
-                    <div className="border-l-2 border-brand-purple pl-4 py-1">
-                      <p className="text-xs font-medium text-white/90">Variasi Leksikal</p>
-                      <p className="text-[10px] text-text-dim mt-1 leading-relaxed">{feedback?.vocabulary}</p>
-                    </div>
+                    <span className="w-14 text-right text-xs font-mono text-text-muted">{cat.score}/{max}</span>
                   </div>
-                </div>
+                );
+              })}
+            </div>
+          </section>
 
-                {/* Suggestions */}
-                <div className="sophisticated-card p-6">
-                   <h3 className="academic-label mb-6">Penyempurnaan Taktis</h3>
-                   <div className="space-y-6">
-                     {feedback?.suggestions && Object.entries(feedback.suggestions).map(([category, tips]) => (
-                        <div key={category} className="space-y-2">
-                          <p className="text-[9px] uppercase tracking-widest text-text-muted font-mono flex items-center gap-2">
-                            <div className="w-1 h-1 rounded-full bg-brand-blue" />
-                            {category === 'sentenceStructure' ? 'Struktur Kalimat' : category === 'wordChoice' ? 'Pilihan Kata' : 'Nada Akademik'}
-                          </p>
-                          <div className="space-y-2">
-                            {Array.isArray(tips) && tips.map((suggestion: string, idx: number) => (
-                              <div key={idx} className="flex gap-3 text-[11px] text-text-dim border-b border-white/5 pb-2 last:border-0 last:pb-0">
-                                <span className="text-brand-blue font-mono">{idx + 1}</span>
-                                {suggestion}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                   </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </section>
-      </div>
+          {/* Kategori error + koreksi + penjelasan + saran */}
+          {feedback.categories.filter(c => c.errors.length > 0 || c.suggestions.length > 0).map(cat => (
+            <section key={cat.name} className="bg-white/[0.03] border-border-main rounded-lg p-6">
+              <h3 className="text-sm font-semibold text-white/90">{cat.name}</h3>
+              {cat.errors.length > 0 && (
+                <ul className="mt-3 space-y-3">
+                  {cat.errors.map((err, i) => (
+                    <li key={i} className="border-l-2 border-brand-blue/50 pl-3">
+                      <p className="text-sm">
+                        <span className="text-red-400 line-through">{err.original}</span>
+                        {' → '}
+                        <span className="text-emerald-400 font-medium">{err.correction}</span>
+                      </p>
+                      {err.explanation && <p className="mt-0.5 text-xs text-text-dim">{err.explanation}</p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {cat.suggestions.length > 0 && (
+                <ul className="mt-3 space-y-1">
+                  {cat.suggestions.map((s, i) => (
+                    <li key={i} className="text-xs text-text-dim">• {s}</li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ))}
+
+          {/* Before / After */}
+          <section className="grid md:grid-cols-2 gap-4">
+            <div className="bg-white/[0.03] border-border-main rounded-lg p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">Before</p>
+              <p className="text-sm text-text-dim whitespace-pre-wrap">{text}</p>
+            </div>
+            <div className="bg-white/[0.03] border-emerald-500/30 rounded-lg p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-400 mb-2">After</p>
+              <p className="text-sm text-white/90 whitespace-pre-wrap">{feedback.corrected_text}</p>
+            </div>
+          </section>
+
+          {/* Overall feedback + learning suggestion */}
+          {feedback.overall_feedback && (
+            <section className="bg-white/[0.03] border-border-main rounded-lg p-6">
+              <h3 className="text-sm font-semibold text-white/90">Umpan Balik Keseluruhan</h3>
+              <p className="mt-2 text-sm text-text-dim">{feedback.overall_feedback}</p>
+              {feedback.learning_suggestion && (
+                <p className="mt-3 text-sm text-brand-blue">Saran belajar: {feedback.learning_suggestion}</p>
+              )}
+            </section>
+          )}
+
+          {saveError && (
+            <div className="flex items-start gap-2 bg-amber-500/10 border-amber-500/30 rounded-lg p-4">
+              <CheckCircle2 className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+              <p className="text-sm text-amber-300">{saveError}</p>
+            </div>
+          )}
+
+          {/* YouTube: topik dari Gemini, video dari YouTube Data API */}
+          {feedback.youtube_query && (
+            <YouTubeRecommendations
+              submissionId={savedRow?.id ?? null}
+              topic={feedback.topic || feedback.weakness}
+              subtopic={feedback.subtopic}
+              query={feedback.youtube_query}
+              userId={user!.id}
+            />
+          )}
+        </div>
+      )}
+
+      {!feedback && !isAnalyzing && !analysisError && (
+        <div className="border border-dashed border-border-main rounded-lg p-10 text-center">
+          <p className="text-sm text-text-muted">Hasil analisis akan muncul di sini setelah kamu mengklik "Analisis Naskah".</p>
+        </div>
+      )}
     </div>
   );
 }

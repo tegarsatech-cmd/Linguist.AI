@@ -1,309 +1,244 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { motion } from 'motion/react';
-import { BookOpen, Mic, LogOut, ChevronRight, BarChart3, Clock, TrendingUp, Filter, ArrowUpDown } from 'lucide-react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { BookOpen, Mic, LogOut, BarChart3, Clock, Trash2, RefreshCw } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { collection, query, where, orderBy, getDocs, limit } from 'firebase/firestore';
-import { db } from '../lib/firebase';
-import { handleFirestoreError, OperationType } from '../lib/error-handler';
+import { fetchSubmissions, deleteSubmission, type SubmissionRow } from '../lib/submissions';
 
-interface Submission {
-  id: string;
-  type: 'writing' | 'speaking';
-  score: number;
-  timestamp: any;
-}
-
+/**
+ * Dashboard: Riwayat + Progress.
+ * Semua data diambil dari tabel `submissions` (Supabase, RLS user_id = auth.uid()).
+ * Tidak ada angka dummy. Empty state jika belum ada data.
+ */
 export default function Dashboard() {
   const navigate = useNavigate();
-  const location = useLocation();
-  const historyRef = useRef<HTMLDivElement | null>(null);
-  const { user } = useAuth();
-  const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [typeFilter, setTypeFilter] = useState<'all' | 'writing' | 'speaking'>('all');
-  const [sortBy, setSortBy] = useState<'date' | 'score'>('date');
-  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const { user, logout } = useAuth();
+  const [submissions, setSubmissions] = useState<SubmissionRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [filter, setFilter] = useState<'all' | 'writing' | 'speaking'>('all');
 
-  useEffect(() => {
-    if (user) {
-      const fetchHistory = async () => {
-        try {
-          const q = query(
-            collection(db, 'submissions'),
-            where('userId', '==', user.uid),
-            orderBy('timestamp', 'desc'),
-            limit(20)
-          );
-          const querySnapshot = await getDocs(q);
-          const docs = querySnapshot.docs.map((docSnap) => {
-            const data = docSnap.data() as any;
-
-            // Normalize timestamp: prefer stored timestamp, then null
-            let timestamp = data.timestamp ?? null;
-
-            // If timestamp is a plain JS Date or number, wrap to provide toMillis/toDate used elsewhere
-            if (timestamp && typeof timestamp.toDate !== 'function') {
-              if (timestamp instanceof Date) {
-                const d = timestamp as Date;
-                timestamp = {
-                  toDate: () => d,
-                  toMillis: () => d.getTime()
-                };
-              } else if (typeof timestamp === 'number') {
-                const d = new Date(timestamp);
-                timestamp = {
-                  toDate: () => d,
-                  toMillis: () => d.getTime()
-                };
-              }
-            }
-
-            const rawScore = typeof data.score === 'number' ? data.score : (data.feedback?.score ?? 0);
-
-            const normalized: Submission = {
-              id: docSnap.id,
-              type: data.type || (data.feedback ? 'speaking' : 'writing') || 'writing',
-              score: Number.isFinite(rawScore) ? rawScore : 0,
-              timestamp,
-            } as Submission;
-
-            // attach other fields if needed
-            return { ...normalized, ...data } as Submission;
-          });
-          setSubmissions(docs);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.GET, 'submissions');
-        }
-      };
-      fetchHistory();
-    }
-  }, [user]);
-
-  useEffect(() => {
-    if (location.hash === '#history' && historyRef.current) {
-      historyRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  }, [location.hash]);
-
-  const scrollToHistory = () => {
-    if (historyRef.current) {
-      historyRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const load = async () => {
+    if (!user) return;
+    setLoading(true);
+    setLoadError('');
+    try {
+      setSubmissions(await fetchSubmissions(user.id));
+    } catch (e: any) {
+      console.error(e?.message);
+      setLoadError('Gagal memuat riwayat. Coba lagi.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const filteredSubmissions = useMemo(() => {
-    let result = [...submissions];
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [user?.id]);
 
-    if (typeFilter !== 'all') {
-      result = result.filter(s => s.type === typeFilter);
+  const handleDelete = async (id: string) => {
+    if (!confirm('Hapus hasil latihan ini?')) return;
+    try {
+      await deleteSubmission(id);
+      setSubmissions(prev => prev.filter(s => s.id !== id));
+    } catch (e: any) {
+      console.error(e?.message);
+      alert('Gagal menghapus. Coba lagi.');
     }
+  };
 
-    result.sort((a, b) => {
-      if (sortBy === 'date') {
-        const timeA = a.timestamp?.toMillis() || 0;
-        const timeB = b.timestamp?.toMillis() || 0;
-        return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
-      } else {
-        const scoreA = a.score || 0;
-        const scoreB = b.score || 0;
-        return sortOrder === 'desc' ? scoreB - scoreA : scoreA - scoreB;
+  const filtered = useMemo(
+    () => (filter === 'all' ? submissions : submissions.filter(s => s.type === filter)),
+    [submissions, filter]
+  );
+
+  // Progress: statistik dari data nyata
+  const stats = useMemo(() => {
+    const scores = submissions.map(s => s.score).filter(n => typeof n === 'number' && Number.isFinite(n));
+    if (scores.length === 0) return null;
+
+    const oldest = scores[scores.length - 1];
+    const newest = scores[0]; // urutan created_at DESC
+    const frequentCats = new Map<string, number>();
+    for (const s of submissions) {
+      for (const c of s.error_categories ?? []) {
+        frequentCats.set(c, (frequentCats.get(c) ?? 0) + 1);
       }
-    });
+    }
+    const topCategories = [...frequentCats.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
 
-    return result;
-  }, [submissions, typeFilter, sortBy, sortOrder]);
-
-  const chartSubmissions = useMemo(() => {
-    return filteredSubmissions.length > 0 ? filteredSubmissions : submissions;
-  }, [filteredSubmissions, submissions]);
+    return {
+      count: submissions.length,
+      average: Math.round(scores.reduce((a, b) => a + b, 0) / scores.length),
+      latest: newest,
+      best: Math.max(...scores),
+      change: newest - oldest,
+      topCategories,
+    };
+  }, [submissions]);
 
   return (
-    <div className="p-8 pb-24 max-w-7xl mx-auto space-y-10 min-h-full">
-      <header>
-        <h2 className="academic-label mb-1">Ikhtisar Sesi</h2>
-        <h1 className="text-3xl font-serif italic text-white/90">Wawasan Portofolio</h1>
+    <div className="p-6 md:p-10 pb-28 max-w-6xl mx-auto space-y-8 min-h-full">
+      <header className="flex flex-wrap justify-between items-center gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-white/95">Dashboard Latihan</h1>
+          <p className="mt-1 text-sm text-text-muted">
+            Halo{user?.email ? `, ${user.email}` : ''} — pantau riwayat dan perkembangan belajarmu.
+          </p>
+        </div>
+        <button onClick={logout} className="flex items-center gap-2 text-xs text-text-muted hover:text-white transition-colors">
+          <LogOut className="w-4 h-4" /> Keluar
+        </button>
       </header>
 
-      <div className="grid lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 space-y-8">
-          <div className="grid md:grid-cols-2 gap-6 h-fit">
-            {/* Writing Card */}
-            <motion.div
-              whileHover={{ scale: 1.01 }}
-              className="sophisticated-card p-8 group cursor-pointer relative overflow-hidden"
-              onClick={() => navigate('/exercise/writing')}
-            >
-              <div className="w-10 h-10 bg-white/5 rounded flex items-center justify-center mb-6 border border-border-main group-hover:border-brand-blue/30 transition-all">
-                <BookOpen className="w-5 h-5 text-brand-blue" />
-              </div>
-              <h3 className="text-xl font-serif italic mb-2 tracking-tight">Tes Kalimat Inggris</h3>
-              <p className="text-text-dim text-xs leading-relaxed mb-6 font-light">
-                Uji kemampuan struktur dan pilihan kata dalam kalimat bahasa Inggris dengan feedback ringkas.
-              </p>
-              <div className="flex gap-2">
-                 <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 bg-white/5 border border-white/5 rounded text-text-muted">Kalimat Akademik</span>
-              </div>
-            </motion.div>
+      {/* Modul */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <button
+          onClick={() => navigate('/exercise/writing')}
+          className="bg-white/[0.03] border-border-main rounded-lg p-6 text-left hover:border-brand-blue/40 transition-colors"
+        >
+          <BookOpen className="w-5 h-5 text-brand-blue mb-3" />
+          <h3 className="text-sm font-semibold text-white/90">Tes Kalimat Inggris</h3>
+          <p className="mt-1 text-xs text-text-muted">Analisis kesalahan tata bahasa, kosakata, dan struktur dengan rubrik penilaian.</p>
+        </button>
+        <button
+          onClick={() => navigate('/exercise/speaking')}
+          className="bg-white/[0.03] border-border-main rounded-lg p-6 text-left hover:border-brand-purple/40 transition-colors"
+        >
+          <Mic className="w-5 h-5 text-brand-purple mb-3" />
+          <h3 className="text-sm font-semibold text-white/90">Tes Berbicara Inggris</h3>
+          <p className="mt-1 text-xs text-text-muted">Rekam suaramu dan dapatkan umpan balik kebahasaan dari transkrip.</p>
+        </button>
+      </div>
 
-            {/* Speaking Card */}
-            <motion.div
-              whileHover={{ scale: 1.01 }}
-              className="sophisticated-card p-8 group cursor-pointer relative overflow-hidden"
-              onClick={() => navigate('/exercise/speaking')}
-            >
-              <div className="w-10 h-10 bg-white/5 rounded flex items-center justify-center mb-6 border border-border-main group-hover:border-brand-purple/30 transition-all">
-                <Mic className="w-5 h-5 text-brand-purple" />
-              </div>
-              <h3 className="text-xl font-serif italic mb-2 tracking-tight">Tes Berbicara Inggris</h3>
-              <p className="text-text-dim text-xs leading-relaxed mb-6 font-light">
-                Cek kefasihan dan intonasi bicara Inggris dengan insight singkat demi tampil percaya diri.
-              </p>
-              <div className="flex gap-2">
-                 <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 bg-white/5 border border-white/5 rounded text-text-muted">Kefasihan Lisan</span>
-              </div>
-            </motion.div>
-          </div>
-
-          {/* Performance Summary */}
-          <div className="sophisticated-card p-8 cursor-pointer" onClick={scrollToHistory}>
-            <div className="flex justify-between items-center mb-4">
-              <div>
-                <h3 className="text-sm font-medium flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-brand-blue" /> Riwayat Hasil Latihan
-                </h3>
-                <p className="text-[10px] uppercase tracking-[0.2em] text-text-muted mt-0.5">Menampilkan hasil sesi latihan terbaru Anda</p>
-              </div>
-              <BarChart3 className="w-5 h-5 text-white/10" />
-            </div>
-            <p className="text-[10px] text-text-muted mb-6">{chartSubmissions.length > 0 ? `Menampilkan ${chartSubmissions.length} hasil terakhir` : 'Belum ada riwayat latihan untuk ditampilkan.'}</p>
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); scrollToHistory(); }}
-              className="text-[10px] uppercase tracking-widest px-3 py-2 border border-white/10 rounded-md hover:border-brand-blue hover:text-brand-blue transition-colors"
-            >
-              Lihat Riwayat
-            </button>
-            <div className="h-40 flex items-end gap-3 px-4 border-b border-border-main pb-1">
-               {chartSubmissions.length === 0 ? (
-                 <div className="w-full h-full flex items-center justify-center text-text-muted/30 text-xs uppercase tracking-widest font-mono">Data tidak mencukupi untuk visualisasi</div>
-               ) : (
-                 chartSubmissions.slice().reverse().map((sub, i) => (
-                   <motion.div 
-                    key={sub.id ?? i}
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: `${Math.min(Math.max(sub.score, 0), 100)}%`, opacity: 1 }}
-                    transition={{ delay: i * 0.05 }}
-                    className={`flex-1 rounded-t-[2px] ${sub.type === 'writing' ? 'bg-brand-blue' : 'bg-brand-purple'}`}
-                    title={`${sub.type === 'writing' ? 'Menulis' : 'Bicara'}: ${Math.round(sub.score)}%`}
-                   />
-                 ))
-               )}
-            </div>
-            <div className="flex justify-between mt-4 text-[9px] uppercase tracking-widest font-mono text-text-muted">
-               <span>Penilaian Garis Dasar</span>
-               <span>Standar Saat Ini</span>
-            </div>
-          </div>
+      {/* Progress */}
+      <section className="bg-white/[0.03] border-border-main rounded-lg p-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-white/90 flex items-center gap-2">
+            <BarChart3 className="w-4 h-4 text-brand-blue" /> Progress
+          </h2>
+          <button onClick={load} className="text-text-muted hover:text-white" aria-label="Muat ulang">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
         </div>
 
-        {/* History Sidebar */}
-        <aside className="space-y-6" ref={historyRef} id="history">
-          <div className="sophisticated-card p-8 h-full flex flex-col">
-            <h3 className="academic-label mb-8 flex items-center gap-2">
-              <Clock className="w-3 h-3" /> Penilaian Terbaru
-            </h3>
+        {!stats && !loading && (
+          <p className="mt-4 text-sm text-text-muted">Belum ada data latihan. Selesaikan latihan pertamamu untuk mulai melihat progress.</p>
+        )}
 
-            {/* Filters Row */}
-            <div className="flex flex-col gap-4 mb-8 bg-white/5 p-4 rounded border border-white/5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Filter className="w-3 h-3 text-text-muted" />
-                  <span className="text-[10px] uppercase font-mono tracking-widest text-text-muted">Tipe</span>
-                </div>
-                <div className="flex gap-2">
-                  {['all', 'writing', 'speaking'].map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => setTypeFilter(t as any)}
-                      className={`text-[9px] px-2 py-0.5 rounded border transition-all uppercase tracking-tighter ${
-                        typeFilter === t 
-                        ? 'bg-brand-blue/20 border-brand-blue text-brand-blue' 
-                        : 'bg-transparent border-white/10 text-text-muted hover:border-white/30'
-                      }`}
-                    >
-                      {t === 'all' ? 'Semua' : t === 'writing' ? 'Menulis' : 'Bicara'}
-                    </button>
+        {stats && (
+          <>
+            <div className="mt-4 grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="border-border-main/60 rounded-md p-3">
+                <p className="text-[10px] uppercase tracking-wide text-text-muted">Jumlah Latihan</p>
+                <p className="text-lg font-semibold text-white">{stats.count}</p>
+              </div>
+              <div className="border-border-main/60 rounded-md p-3">
+                <p className="text-[10px] uppercase tracking-wide text-text-muted">Rata-rata Skor</p>
+                <p className="text-lg font-semibold text-white">{stats.average}</p>
+              </div>
+              <div className="border-border-main/60 rounded-md p-3">
+                <p className="text-[10px] uppercase tracking-wide text-text-muted">Skor Terbaru</p>
+                <p className="text-lg font-semibold text-white">{stats.latest}</p>
+              </div>
+              <div className="border-border-main/60 rounded-md p-3">
+                <p className="text-[10px] uppercase tracking-wide text-text-muted">Skor Tertinggi</p>
+                <p className="text-lg font-semibold text-white">{stats.best}</p>
+              </div>
+              <div className="border-border-main/60 rounded-md p-3">
+                <p className="text-[10px] uppercase tracking-wide text-text-muted">Perkembangan</p>
+                <p className={`text-lg font-semibold ${stats.change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {stats.change >= 0 ? '+' : ''}{stats.change}
+                </p>
+              </div>
+            </div>
+
+            {/* Grafik skor (dari data nyata, terlama → terbaru) */}
+            <div className="mt-6">
+              <p className="text-[10px] uppercase tracking-wide text-text-muted mb-2">Perkembangan Skor</p>
+              <div className="h-32 flex items-end gap-2 border-b border-border-main pb-1">
+                {submissions.slice().reverse().map((s) => (
+                  <div
+                    key={s.id}
+                    title={`${s.type}: ${Math.round(s.score)}`}
+                    style={{ height: `${Math.max(4, Math.min(100, s.score))}%` }}
+                    className={`flex-1 min-w-[8px] rounded-t ${s.type === 'writing' ? 'bg-brand-blue/70' : 'bg-brand-purple/70'}`}
+                  />
+                ))}
+              </div>
+              <p className="mt-1 text-[10px] text-text-muted text-right">{submissions.length} latihan terakhir</p>
+            </div>
+
+            {stats.topCategories.length > 0 && (
+              <div className="mt-4">
+                <p className="text-[10px] uppercase tracking-wide text-text-muted mb-2">Kategori yang Sering Keliru</p>
+                <div className="flex flex-wrap gap-2">
+                  {stats.topCategories.map(([name, count]) => (
+                    <span key={name} className="text-xs bg-red-500/10 border-red-500/20 text-red-300 rounded px-2 py-0.5">
+                      {name} ({count}×)
+                    </span>
                   ))}
                 </div>
               </div>
+            )}
+          </>
+        )}
+      </section>
 
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <ArrowUpDown className="w-3 h-3 text-text-muted" />
-                  <span className="text-[10px] uppercase font-mono tracking-widest text-text-muted">Urutkan</span>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      if (sortBy === 'date') setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc');
-                      else { setSortBy('date'); setSortOrder('desc'); }
-                    }}
-                    className={`text-[9px] px-2 py-0.5 rounded border transition-all flex items-center gap-1 uppercase tracking-tighter ${
-                      sortBy === 'date' 
-                      ? 'bg-brand-purple/20 border-brand-purple text-brand-purple' 
-                      : 'bg-transparent border-white/10 text-text-muted hover:border-white/30'
-                    }`}
-                  >
-                    Tanggal {sortBy === 'date' && (sortOrder === 'desc' ? '↓' : '↑')}
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (sortBy === 'score') setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc');
-                      else { setSortBy('score'); setSortOrder('desc'); }
-                    }}
-                    className={`text-[9px] px-2 py-0.5 rounded border transition-all flex items-center gap-1 uppercase tracking-tighter ${
-                      sortBy === 'score' 
-                      ? 'bg-brand-purple/20 border-brand-purple text-brand-purple' 
-                      : 'bg-transparent border-white/10 text-text-muted hover:border-white/30'
-                    }`}
-                  >
-                    Skor {sortBy === 'score' && (sortOrder === 'desc' ? '↓' : '↑')}
-                  </button>
-                </div>
-              </div>
-            </div>
-            
-            <div className="space-y-8 flex-1 overflow-y-auto pr-1">
-              {filteredSubmissions.map((sub) => (
-                <div key={sub.id} className="relative pl-6 border-l border-border-main pb-2 group">
-                   <div className="absolute left-[-2.5px] top-0 w-1 h-1 rounded-full bg-border-main group-hover:bg-brand-blue transition-colors" />
-                   <p className="text-[9px] font-mono text-text-muted uppercase tracking-widest">
-                     {sub.timestamp?.toDate().toLocaleDateString('id-ID', { month: 'short', day: 'numeric', year: 'numeric' })}
-                   </p>
-                   <h4 className="text-xs font-medium mt-1 uppercase tracking-wider text-white/80">
-                     {sub.type === 'writing' ? 'Evaluasi Menulis' : 'Umpan Balik Suara'}
-                   </h4>
-                   <div className="mt-2 flex items-center gap-3">
-                     <div className="w-full bg-white/5 h-1 rounded-full overflow-hidden">
-                       <div 
-                         className={`${sub.type === 'writing' ? 'bg-brand-blue' : 'bg-brand-purple'} h-full`} 
-                         style={{ width: `${sub.score}%` }} 
-                       />
-                     </div>
-                     <span className="text-[10px] font-mono text-white/50">{Math.round(sub.score)}</span>
-                   </div>
-                </div>
-              ))}
-              {filteredSubmissions.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-10 opacity-30">
-                  <Filter className="w-8 h-8 mb-4" />
-                  <p className="text-[10px] text-text-muted italic tracking-widest uppercase text-center">Hasil Tidak Ditemukan</p>
-                </div>
-              )}
-            </div>
+      {/* Riwayat */}
+      <section className="bg-white/[0.03] border-border-main rounded-lg p-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-white/90 flex items-center gap-2">
+            <Clock className="w-4 h-4 text-brand-blue" /> Riwayat Hasil Latihan
+          </h2>
+          <div className="flex gap-1">
+            {(['all', 'writing', 'speaking'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setFilter(t)}
+                className={`text-[10px] px-2 py-1 rounded transition-colors ${filter === t ? 'bg-brand-blue/20 text-brand-blue' : 'text-text-muted hover:text-white'
+                  }`}
+              >
+                {t === 'all' ? 'Semua' : t === 'writing' ? 'Writing' : 'Speaking'}
+              </button>
+            ))}
           </div>
-        </aside>
-      </div>
+        </div>
+
+        {loadError && <p className="mt-3 text-sm text-red-400">{loadError}</p>}
+        {loading && <p className="mt-3 text-sm text-text-muted">Memuat…</p>}
+        {!loading && !loadError && filtered.length === 0 && (
+          <p className="mt-3 text-sm text-text-muted">Belum ada hasil latihan{filter !== 'all' ? ' untuk kategori ini' : ''}.</p>
+        )}
+
+        <ul className="mt-4 space-y-3">
+          {filtered.map(s => (
+            <li key={s.id} className="flex items-center gap-4 border-b border-border-main/50 pb-3 last:border-0">
+              <div className="w-12 text-center shrink-0">
+                <p className={`text-lg font-semibold ${s.score >= 80 ? 'text-emerald-400' : s.score >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {Math.round(s.score)}
+                </p>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-white/90 capitalize">{s.type}</p>
+                <p className="text-xs text-text-muted truncate">{s.original_text}</p>
+                {s.error_categories?.length > 0 && (
+                  <p className="mt-0.5 text-[10px] text-text-muted">{s.error_categories.join(' · ')}</p>
+                )}
+              </div>
+              <div className="text-right shrink-0 space-y-1">
+                <p className="text-[10px] text-text-muted">
+                  {new Date(s.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                </p>
+                <button
+                  onClick={() => handleDelete(s.id)}
+                  className="text-text-muted hover:text-red-400 transition-colors"
+                  aria-label="Hapus hasil"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }

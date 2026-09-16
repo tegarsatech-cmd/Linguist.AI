@@ -17,7 +17,8 @@ export default function Layout({ children }: LayoutProps) {
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Tes Kalimat Inggris', path: '/exercise/writing', icon: PenTool },
     { name: 'Tes Berbicara Inggris', path: '/exercise/speaking', icon: Mic2 },
-    { name: 'Lab Kosakata', path: '#', icon: FlaskConical, disabled: true },
+    { name: 'Rubrik Penilaian', path: '/rubric', icon: FlaskConical },
+    { name: 'Lab Kosakata', path: '#', disabled: true, icon: FlaskConical },
   ];
 
   return (

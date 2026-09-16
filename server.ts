@@ -8,6 +8,66 @@ import Groq from 'groq-sdk';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function numOr(v: unknown, fallback: number): number {
+  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : fallback;
+}
+
+interface YouTubeSearchResponse {
+  items?: {
+    id?: { videoId?: string };
+    snippet?: {
+      title?: string;
+      channelTitle?: string;
+      description?: string;
+      publishedAt?: string;
+      thumbnails?: { high?: { url?: string }; medium?: { url?: string }; default?: { url?: string } };
+    };
+  }[];
+  error?: { message?: string };
+}
+
+/** Search.list YouTube Data API v3 (server-side; API key tidak pernah dikirim ke browser). */
+async function youtubeSearch(query: string, maxResults: number) {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) {
+    throw Object.assign(new Error('YOUTUBE_API_KEY belum dikonfigurasi di server.'), { status: 500 });
+  }
+
+  const params = new URLSearchParams({
+    part: 'snippet',
+    type: 'video',
+    q: query,
+    maxResults: String(Math.min(Math.max(maxResults, 1), 12)),
+    order: 'relevance',
+    videoEmbeddable: 'true',
+    relevanceLanguage: 'en',
+    key: apiKey,
+  });
+
+  const res = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
+  const json = (await res.json()) as YouTubeSearchResponse;
+
+  if (!res.ok) {
+    console.error('YouTube API Error:', json?.error?.message || res.status);
+    throw Object.assign(new Error('YouTube API gagal.'), { status: 502 });
+  }
+
+  return (json.items ?? [])
+    .filter(it => it.id?.videoId && it.snippet?.title)
+    .map(it => ({
+      video_id: it.id!.videoId!,
+      title: it.snippet!.title!,
+      channel_title: it.snippet!.channelTitle ?? '',
+      thumbnail_url:
+        it.snippet!.thumbnails?.high?.url ||
+        it.snippet!.thumbnails?.medium?.url ||
+        `https://i.ytimg.com/vi/${it.id!.videoId}/hqdefault.jpg`,
+      description: (it.snippet!.description ?? '').slice(0, 200),
+      published_at: it.snippet!.publishedAt ?? '',
+    }));
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -29,8 +89,8 @@ async function startServer() {
         messages: [
           {
             role: 'system',
-            content: `You are an Academic English Writing Tutor. 
-            Provide feedback on the following essay. 
+            content: `You are an Academic English Writing Tutor.
+            Provide feedback on the following essay.
             Output must be in JSON format with the following keys:
             - score: number (0-100)
             - grammar: string (feedback on grammar)
@@ -62,7 +122,7 @@ async function startServer() {
         messages: [
           {
             role: 'system',
-            content: `You are an Academic English Speaking Tutor. 
+            content: `You are an Academic English Speaking Tutor.
             Analyze the following transcript from a spoken recording.
             Output must be in JSON format with the following keys:
             - pronunciationScore: number (0-100)
@@ -82,6 +142,25 @@ async function startServer() {
     } catch (error: any) {
       console.error('Groq Error:', error);
       res.status(500).json({ error: 'Failed to get AI feedback' });
+    }
+  });
+
+  // Rekomendasi YouTube berbasis topic hasil analisis Gemini.
+  // Frontend mengirim { query, maxResults, topic, subtopic } — API key tetap di server.
+  app.post('/api/youtube-recommendations', async (req, res) => {
+    const { query, maxResults } = req.body ?? {};
+    if (typeof query !== 'string' || !query.trim()) {
+      return res.status(400).json({ error: 'Query diperlukan.' });
+    }
+    try {
+      const videos = await youtubeSearch(query.trim(), numOr(maxResults, 6));
+      if (videos.length === 0) {
+        return res.status(404).json({ error: 'Belum ditemukan video yang sesuai untuk materi ini.' });
+      }
+      res.json({ videos });
+    } catch (error: any) {
+      console.error('YouTube recommendation error:', error?.message);
+      res.status(error?.status ?? 502).json({ error: 'Rekomendasi video belum dapat dimuat. Silakan coba lagi.' });
     }
   });
 
