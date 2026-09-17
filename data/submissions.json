@@ -1,0 +1,145 @@
+[
+  {
+    "id": "f224ed73-b4fe-4a9d-9490-9257a1acd571",
+    "user_id": "f9055810-28aa-4309-aa99-751952004040",
+    "type": "writing",
+    "original_text": "hallo may name",
+    "corrected_text": "Hello, my name is...",
+    "score": 50,
+    "error_categories": [
+      "Grammar",
+      "Sentence Structure",
+      "Spelling",
+      "Clarity/Coherence"
+    ],
+    "feedback": {
+      "score": 50,
+      "categories": [
+        {
+          "name": "Grammar",
+          "score": 15,
+          "errors": [
+            {
+              "original": "may name",
+              "correction": "my name",
+              "explanation": "Kata 'may' adalah kata kerja modal yang berarti 'mungkin' atau 'boleh', sedangkan yang dibutuhkan di sini adalah kata ganti kepemilikan 'my' yang berarti 'milik saya'."
+            }
+          ],
+          "suggestions": [
+            "Pelajari perbedaan antara kata ganti kepemilikan (possessive pronouns) dan kata kerja modal (modal verbs).",
+            "Latih penggunaan kata ganti kepemilikan dalam kalimat sederhana."
+          ]
+        },
+        {
+          "name": "Vocabulary",
+          "score": 20,
+          "errors": [],
+          "suggestions": [
+            "Perkaya kosakata dasar untuk percakapan sehari-hari.",
+            "Gunakan kamus untuk memeriksa arti dan penggunaan kata baru."
+          ]
+        },
+        {
+          "name": "Sentence Structure",
+          "score": 5,
+          "errors": [
+            {
+              "original": "may name",
+              "correction": "My name is...",
+              "explanation": "Kalimat ini tidak memiliki kata kerja utama (verb) sehingga tidak membentuk kalimat lengkap. Untuk memperkenalkan nama, diperlukan struktur 'My name is [nama]'."
+            }
+          ],
+          "suggestions": [
+            "Pelajari struktur kalimat dasar dalam bahasa Inggris (Subject-Verb-Object).",
+            "Latih membuat kalimat lengkap dengan subjek dan predikat yang jelas."
+          ]
+        },
+        {
+          "name": "Spelling",
+          "score": 5,
+          "errors": [
+            {
+              "original": "hallo",
+              "correction": "hello",
+              "explanation": "Ejaan yang benar untuk sapaan adalah 'hello', bukan 'hallo'."
+            }
+          ],
+          "suggestions": [
+            "Perhatikan ejaan kata-kata umum dan sering digunakan.",
+            "Gunakan pemeriksa ejaan (spell checker) saat menulis."
+          ]
+        },
+        {
+          "name": "Clarity/Coherence",
+          "score": 5,
+          "errors": [
+            {
+              "original": "hallo may name",
+              "correction": "Hello, my name is...",
+              "explanation": "Teks ini sangat singkat dan tidak membentuk kalimat lengkap, sehingga kurang jelas dan koheren sebagai sebuah pernyataan. Kurangnya kata kerja membuat maksudnya tidak tersampaikan sepenuhnya."
+            }
+          ],
+          "suggestions": [
+            "Pastikan setiap kalimat memiliki ide yang lengkap dan jelas.",
+            "Latih menghubungkan ide-ide sederhana menjadi kalimat yang lebih utuh."
+          ]
+        }
+      ],
+      "overall_feedback": "Teks yang Anda berikan sangat singkat dan memiliki beberapa kesalahan dasar dalam ejaan, tata bahasa, dan struktur kalimat. Penting untuk fokus pada pembentukan kalimat lengkap dan penggunaan kata yang tepat untuk menyampaikan maksud dengan jelas.",
+      "corrected_text": "Hello, my name is...",
+      "learning_suggestion": "Fokuslah pada dasar-dasar pembentukan kalimat dalam bahasa Inggris, termasuk penggunaan subjek, kata kerja, dan objek. Pelajari juga kata ganti kepemilikan dan ejaan kata-kata sapaan umum. Latih membuat kalimat perkenalan diri yang lengkap.",
+      "weakness": "Tata bahasa dasar (terutama kata ganti kepemilikan dan struktur kalimat) serta ejaan kata-kata umum.",
+      "topic": "Perkenalan Diri",
+      "subtopic": "Sapaan dan Nama",
+      "level": "Beginner (A1)",
+      "youtube_query": "Basic English greetings and introductions"
+    },
+    "suggestions": [
+      "Pelajari perbedaan antara kata ganti kepemilikan (possessive pronouns) dan kata kerja modal (modal verbs).",
+      "Latih penggunaan kata ganti kepemilikan dalam kalimat sederhana.",
+      "Perkaya kosakata dasar untuk percakapan sehari-hari.",
+      "Gunakan kamus untuk memeriksa arti dan penggunaan kata baru.",
+      "Pelajari struktur kalimat dasar dalam bahasa Inggris (Subject-Verb-Object).",
+      "Latih membuat kalimat lengkap dengan subjek dan predikat yang jelas.",
+      "Perhatikan ejaan kata-kata umum dan sering digunakan.",
+      "Gunakan pemeriksa ejaan (spell checker) saat menulis.",
+      "Pastikan setiap kalimat memiliki ide yang lengkap dan jelas.",
+      "Latih menghubungkan ide-ide sederhana menjadi kalimat yang lebih utuh."
+    ],
+    "created_at": "2026-09-17T18:10:58.751Z"
+  },
+  {
+    "id": "1f2a711b-fa10-45aa-a79b-a4a222c93db1",
+    "user_id": "f9055810-28aa-4309-aa99-751952004040",
+    "type": "speaking",
+    "original_text": "Hello everyone.",
+    "corrected_text": null,
+    "score": 4,
+    "error_categories": [
+      "The primary weakness is the extreme brevity of the response, which prevents a meaningful evaluation of academic speaking skills such as coherence, lexical resource, and grammatical range and accuracy in a sustained discourse."
+    ],
+    "feedback": {
+      "score": 4,
+      "transcription": "Hello everyone.",
+      "feedback": "The utterance 'Hello everyone' is grammatically correct and clear. However, it is too brief to provide a comprehensive assessment of academic English speaking skills. To demonstrate proficiency, you would need to expand on a topic, develop ideas, and use a wider range of vocabulary and grammatical structures.",
+      "filler_words": [],
+      "fluency_notes": "The sentence is perfectly fluent and natural for a simple greeting.",
+      "improvements": [
+        "Develop ideas with more detail and complexity.",
+        "Utilize a broader range of vocabulary and grammatical structures.",
+        "Practice extending responses beyond simple greetings to demonstrate academic speaking ability."
+      ],
+      "weakness": "The primary weakness is the extreme brevity of the response, which prevents a meaningful evaluation of academic speaking skills such as coherence, lexical resource, and grammatical range and accuracy in a sustained discourse.",
+      "topic": "General Greeting",
+      "subtopic": "N/A",
+      "level": "Insufficient for assessment (Beginner content)",
+      "youtube_query": "Academic English speaking introduction phrases, Developing academic speaking skills, Expanding on ideas in English speaking"
+    },
+    "suggestions": [
+      "Develop ideas with more detail and complexity.",
+      "Utilize a broader range of vocabulary and grammatical structures.",
+      "Practice extending responses beyond simple greetings to demonstrate academic speaking ability."
+    ],
+    "created_at": "2026-09-17T18:09:27.401Z"
+  }
+]

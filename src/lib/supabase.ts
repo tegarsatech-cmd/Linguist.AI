@@ -1,14 +1,25 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-// Supabase bisa memakai nama lama (anon key) atau baru (publishable key)
+// Kredensial default Supabase Linguist.AI agar deployment di Vercel langsung berfungsi
+// tanpa perlu repot memasukkan variabel lingkungan secara manual di dashboard Vercel.
+const DEFAULT_SUPABASE_URL = "https://bwvpqznevaeatawrdrro.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY = "sb_publishable_HGJgi7_n6eH0_-y4NNDGFw_TdBXZkSk";
+
+const supabaseUrl =
+  (typeof import.meta !== "undefined" && import.meta.env?.VITE_SUPABASE_URL) ||
+  DEFAULT_SUPABASE_URL;
+
 const supabaseAnonKey =
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
+  (typeof import.meta !== "undefined" &&
+    (import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY ||
+      import.meta.env?.VITE_SUPABASE_ANON_KEY)) ||
+  DEFAULT_SUPABASE_ANON_KEY;
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error(
-    "Supabase tidak terkonfigurasi: set VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY di .env atau dashboard Vercel."
-  );
-}
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  },
+});
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);

@@ -4,9 +4,47 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Groq from 'groq-sdk';
+import fs from 'fs';
+import { GoogleGenAI } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const DATA_DIR = path.join(__dirname, 'data');
+const SUBMISSIONS_FILE = path.join(DATA_DIR, 'submissions.json');
+
+function ensureDataStore(): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (!fs.existsSync(SUBMISSIONS_FILE)) {
+      fs.writeFileSync(SUBMISSIONS_FILE, JSON.stringify([], null, 2), 'utf-8');
+    }
+  } catch (e) {
+    console.error('Data store init error:', e);
+  }
+}
+
+function readSubmissions(): any[] {
+  ensureDataStore();
+  try {
+    const raw = fs.readFileSync(SUBMISSIONS_FILE, 'utf-8');
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error('Error reading submissions:', e);
+    return [];
+  }
+}
+
+function writeSubmissions(rows: any[]): void {
+  ensureDataStore();
+  try {
+    fs.writeFileSync(SUBMISSIONS_FILE, JSON.stringify(rows, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Error writing submissions:', e);
+  }
+}
 
 function numOr(v: unknown, fallback: number): number {
   const n = typeof v === 'number' ? v : parseFloat(String(v));
@@ -34,11 +72,21 @@ async function youtubeSearch(query: string, maxResults: number) {
     throw Object.assign(new Error('YOUTUBE_API_KEY belum dikonfigurasi di server.'), { status: 500 });
   }
 
+  // Permutasi query dinamis untuk hasil yang kaya dan tidak monoton
+  const cleanQuery = query.replace(/practice|exercise/gi, '').trim();
+  const searchPool = [
+    query,
+    `${cleanQuery} english lesson`,
+    `${cleanQuery} grammar explanation`,
+    `learn ${cleanQuery} tips`,
+  ];
+  const activeQuery = searchPool[Math.floor(Math.random() * searchPool.length)];
+
   const params = new URLSearchParams({
     part: 'snippet',
     type: 'video',
-    q: query,
-    maxResults: String(Math.min(Math.max(maxResults, 1), 12)),
+    q: activeQuery,
+    maxResults: '12', // Ambil pool lebih besar lalu diacak
     order: 'relevance',
     videoEmbeddable: 'true',
     relevanceLanguage: 'en',
@@ -53,19 +101,23 @@ async function youtubeSearch(query: string, maxResults: number) {
     throw Object.assign(new Error('YouTube API gagal.'), { status: 502 });
   }
 
-  return (json.items ?? [])
+  // Acak urutan video agar pengguna mendapatkan rekomendasi segar dan variatif
+  const items = (json.items ?? [])
     .filter(it => it.id?.videoId && it.snippet?.title)
-    .map(it => ({
-      video_id: it.id!.videoId!,
-      title: it.snippet!.title!,
-      channel_title: it.snippet!.channelTitle ?? '',
-      thumbnail_url:
-        it.snippet!.thumbnails?.high?.url ||
-        it.snippet!.thumbnails?.medium?.url ||
-        `https://i.ytimg.com/vi/${it.id!.videoId}/hqdefault.jpg`,
-      description: (it.snippet!.description ?? '').slice(0, 200),
-      published_at: it.snippet!.publishedAt ?? '',
-    }));
+    .sort(() => 0.5 - Math.random())
+    .slice(0, Math.max(1, Math.min(maxResults, 6)));
+
+  return items.map(it => ({
+    video_id: it.id!.videoId!,
+    title: it.snippet!.title!,
+    channel_title: it.snippet!.channelTitle ?? '',
+    thumbnail_url:
+      it.snippet!.thumbnails?.high?.url ||
+      it.snippet!.thumbnails?.medium?.url ||
+      `https://i.ytimg.com/vi/${it.id!.videoId}/hqdefault.jpg`,
+    description: (it.snippet!.description ?? '').slice(0, 200),
+    published_at: it.snippet!.publishedAt ?? '',
+  }));
 }
 
 async function startServer() {
@@ -75,8 +127,80 @@ async function startServer() {
   app.use(express.json());
 
   // Initialize Groq
-  const groq = new Groq({
+  const groq = process.env.GROQ_API_KEY ? new Groq({
     apiKey: process.env.GROQ_API_KEY,
+  }) : null;
+
+  // Initialize Gemini AI as reliable AI engine
+  const geminiAi = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
+
+  // --- Persistent Database Endpoints ---
+  app.get('/api/database/status', (_req, res) => {
+    const rows = readSubmissions();
+    res.json({
+      status: 'connected',
+      message: 'Database terhubung dan siap.',
+      total_submissions: rows.length,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  app.get('/api/submissions', (req, res) => {
+    try {
+      const { userId, limit } = req.query;
+      let rows = readSubmissions();
+      if (userId && typeof userId === 'string' && userId !== 'all') {
+        // Return submissions for this user or any unassigned submissions
+        rows = rows.filter(r => r.user_id === userId || !r.user_id || r.user_id === 'all');
+      }
+      rows.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      const max = limit ? parseInt(String(limit), 10) : 100;
+      res.json({ success: true, submissions: rows.slice(0, max) });
+    } catch (e: any) {
+      console.error('Error fetching submissions:', e?.message);
+      res.status(500).json({ error: 'Gagal mengambil riwayat dari database.' });
+    }
+  });
+
+  app.post('/api/submissions', (req, res) => {
+    try {
+      const submission = req.body;
+      if (!submission || !submission.type) {
+        return res.status(400).json({ error: 'Data latihan tidak valid.' });
+      }
+
+      if (!submission.id) {
+        submission.id = 'sub_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      }
+      if (!submission.created_at) {
+        submission.created_at = new Date().toISOString();
+      }
+
+      const rows = readSubmissions();
+      const filtered = rows.filter(r => r.id !== submission.id);
+      const updated = [submission, ...filtered];
+      writeSubmissions(updated);
+
+      console.log(`[DB] Submission saved: ${submission.id} (type: ${submission.type}, score: ${submission.score})`);
+      res.json({ success: true, submission });
+    } catch (e: any) {
+      console.error('Error saving submission:', e?.message);
+      res.status(500).json({ error: 'Gagal menyimpan ke database.' });
+    }
+  });
+
+  app.delete('/api/submissions/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const rows = readSubmissions();
+      const updated = rows.filter(r => r.id !== id);
+      writeSubmissions(updated);
+      console.log(`[DB] Submission deleted: ${id}`);
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error deleting submission:', e?.message);
+      res.status(500).json({ error: 'Gagal menghapus dari database.' });
+    }
   });
 
   // API Routes
@@ -85,31 +209,53 @@ async function startServer() {
     if (!text) return res.status(400).json({ error: 'Text is required' });
 
     try {
+      if (geminiAi) {
+        const response = await geminiAi.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: `You are an Academic English Writing Tutor. Provide feedback on the following essay.
+                  Proper nouns (names of people like Budi, places, cultural terms) are valid and must NOT be marked as errors.
+                  Output must be in valid JSON format:
+                  {
+                    "score": number (0-100),
+                    "grammar": string,
+                    "coherence": string,
+                    "vocabulary": string,
+                    "suggestions": string[],
+                    "revisedText": string
+                  }
+                  Respond ONLY with JSON.
+
+                  Essay: ${text}`,
+                },
+              ],
+            },
+          ],
+          config: { responseMimeType: 'application/json' },
+        });
+        const content = response.text || '{}';
+        return res.json(JSON.parse(content));
+      }
+
       const completion = await groq.chat.completions.create({
         messages: [
           {
             role: 'system',
-            content: `You are an Academic English Writing Tutor.
-            Provide feedback on the following essay.
-            Output must be in JSON format with the following keys:
-            - score: number (0-100)
-            - grammar: string (feedback on grammar)
-            - coherence: string (feedback on coherence)
-            - vocabulary: string (feedback on vocabulary)
-            - suggestions: string[] (list of specific improvements)
-            - revisedText: string (a slightly improved version of the text)
-            Respond ONLY with the JSON object.`
+            content: `You are an Academic English Writing Tutor. Respond only with JSON.`
           },
           { role: 'user', content: text }
         ],
-        model: 'llama-3.3-70b-versatile',
+        model: 'qwen/qwen3.8-27b',
         response_format: { type: 'json_object' }
       });
-
       res.json(JSON.parse(completion.choices[0].message.content || '{}'));
     } catch (error: any) {
-      console.error('Groq Error:', error);
-      res.status(500).json({ error: 'Failed to get AI feedback' });
+      console.error('Writing Feedback Error:', error?.message);
+      res.status(500).json({ error: 'Gagal memperoleh umpan balik AI.' });
     }
   });
 
@@ -118,30 +264,52 @@ async function startServer() {
     if (!transcript) return res.status(400).json({ error: 'Transcript is required' });
 
     try {
+      if (geminiAi) {
+        const response = await geminiAi.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: `You are an Academic English Speaking Tutor. Analyze the transcript.
+                  Proper nouns (names of people like Budi, places, local cultural terms) are valid and must NOT be marked as errors or fillers.
+                  Output must be in valid JSON format:
+                  {
+                    "pronunciationScore": number (0-100),
+                    "fluencyScore": number (0-100),
+                    "feedback": string,
+                    "fillerWords": string[],
+                    "improvements": string[]
+                  }
+                  Respond ONLY with JSON.
+
+                  Transcript: ${transcript}`,
+                },
+              ],
+            },
+          ],
+          config: { responseMimeType: 'application/json' },
+        });
+        const content = response.text || '{}';
+        return res.json(JSON.parse(content));
+      }
+
       const completion = await groq.chat.completions.create({
         messages: [
           {
             role: 'system',
-            content: `You are an Academic English Speaking Tutor.
-            Analyze the following transcript from a spoken recording.
-            Output must be in JSON format with the following keys:
-            - pronunciationScore: number (0-100)
-            - fluencyScore: number (0-100)
-            - feedback: string (overall feedback)
-            - fillerWords: string[] (detected filler words like um, ah, etc)
-            - improvements: string[] (specific tips for better delivery)
-            Respond ONLY with the JSON object.`
+            content: `You are an Academic English Speaking Tutor. Respond only with JSON.`
           },
           { role: 'user', content: transcript }
         ],
-        model: 'llama-3.3-70b-versatile',
+        model: 'qwen/qwen3.8-27b',
         response_format: { type: 'json_object' }
       });
-
       res.json(JSON.parse(completion.choices[0].message.content || '{}'));
     } catch (error: any) {
-      console.error('Groq Error:', error);
-      res.status(500).json({ error: 'Failed to get AI feedback' });
+      console.error('Speaking Feedback Error:', error?.message);
+      res.status(500).json({ error: 'Gagal memperoleh umpan balik AI.' });
     }
   });
 

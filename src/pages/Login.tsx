@@ -1,231 +1,560 @@
-import React, { useState } from "react";
-import { motion } from "motion/react";
-import { LogIn, UserPlus, Mail, Lock, Eye, EyeOff } from "lucide-react";
-import { useAuth } from "../contexts/AuthContext";
+import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import {
+  LogIn,
+  UserPlus,
+  Mail,
+  Lock,
+  Eye,
+  EyeOff,
+  AlertCircle,
+  CheckCircle2,
+  KeyRound,
+  ArrowLeft,
+  Sparkles,
+  Clock,
+  Compass,
+} from "lucide-react";
+import { useAuth, translateAuthError } from "../contexts/AuthContext";
+
+type AuthMode = "login" | "register" | "forgot" | "reset";
+
+const STORAGE_FAIL_COUNT = "linguist_login_fail_count";
+const STORAGE_LOCKOUT_UNTIL = "linguist_login_lockout_until";
+const STORAGE_LOCKOUT_LEVEL = "linguist_login_lockout_level";
+const STORAGE_REMEMBERED_EMAIL = "linguist_saved_email";
 
 export default function Login() {
-  const { login, register } = useAuth();
-  const [isRegister, setIsRegister] = useState(false);
+  const { login, register, resetPassword, updatePassword, loginAsGuest } = useAuth();
+  const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  // Rate Limiting States
+  const [failCount, setFailCount] = useState(0);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0); // seconds
+
+  // Deteksi tautan reset kata sandi dari email Supabase (Recovery Token)
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const search = window.location.search || "";
+    if (hash.includes("type=recovery") || search.includes("type=recovery")) {
+      setMode("reset");
+      setSuccess("Tautan pemulihan akun diverifikasi. Silakan masukkan kata sandi baru Anda di bawah ini.");
+    }
+  }, []);
+
+  // Initialize saved email and lockout state from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_REMEMBERED_EMAIL);
+    if (saved) {
+      setEmail(saved);
+      setRememberMe(true);
+    }
+
+    const savedCount = parseInt(localStorage.getItem(STORAGE_FAIL_COUNT) || "0", 10);
+    setFailCount(savedCount);
+
+    const lockoutUntil = parseInt(localStorage.getItem(STORAGE_LOCKOUT_UNTIL) || "0", 10);
+    const now = Date.now();
+    if (lockoutUntil > now) {
+      setLockoutRemaining(Math.ceil((lockoutUntil - now) / 1000));
+    }
+  }, []);
+
+  // Timer interval for rate limiting countdown
+  useEffect(() => {
+    if (lockoutRemaining <= 0) return;
+
+    const timer = setInterval(() => {
+      setLockoutRemaining((prev) => {
+        if (prev <= 1) {
+          localStorage.removeItem(STORAGE_LOCKOUT_UNTIL);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [lockoutRemaining]);
+
+  const switchMode = (newMode: AuthMode) => {
+    setMode(newMode);
+    setError("");
+    setSuccess("");
+    setPassword("");
+    setConfirmPassword("");
+  };
+
+  const handleRateLimitFailure = () => {
+    const newCount = failCount + 1;
+    setFailCount(newCount);
+    localStorage.setItem(STORAGE_FAIL_COUNT, newCount.toString());
+
+    if (newCount >= 3) {
+      const currentLevel = parseInt(localStorage.getItem(STORAGE_LOCKOUT_LEVEL) || "1", 10);
+      // Level 1: 60s (1 min), Level 2: 120s (2 min), Level 3+: 300s (5 min)
+      const lockSeconds = currentLevel === 1 ? 60 : currentLevel === 2 ? 120 : 300;
+      const lockoutTimestamp = Date.now() + lockSeconds * 1000;
+
+      localStorage.setItem(STORAGE_LOCKOUT_UNTIL, lockoutTimestamp.toString());
+      localStorage.setItem(STORAGE_LOCKOUT_LEVEL, (currentLevel + 1).toString());
+      setLockoutRemaining(lockSeconds);
+      setError(
+        `Terlalu banyak percobaan salah (${newCount}x). Akun dibatasi sementara demi keamanan. Coba lagi dalam ${lockSeconds} detik.`
+      );
+    } else {
+      const remainingAttempts = 3 - newCount;
+      setError(
+        `Email atau kata sandi salah. Percobaan ke-${newCount} dari 3. Sisa ${remainingAttempts} kali percobaan sebelum dibatasi 1 menit.`
+      );
+    }
+  };
+
+  const clearRateLimit = () => {
+    setFailCount(0);
+    setLockoutRemaining(0);
+    localStorage.removeItem(STORAGE_FAIL_COUNT);
+    localStorage.removeItem(STORAGE_LOCKOUT_UNTIL);
+    localStorage.removeItem(STORAGE_LOCKOUT_LEVEL);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (lockoutRemaining > 0) return;
+
     setError("");
     setSuccess("");
-    setLoading(true);
 
-    try {
-      if (isRegister) {
-        if (password !== confirmPassword) {
-          setError("Password tidak cocok");
-          return;
-        }
-        await register(email, password);
-        setSuccess("Pendaftaran berhasil. Silakan cek email Anda untuk konfirmasi.");
-        setEmail("");
+    // Mode: Reset Kata Sandi Baru dari tautan email
+    if (mode === "reset") {
+      if (password.length < 6) {
+        setError("Kata sandi baru minimal harus terdiri dari 6 karakter.");
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError("Konfirmasi kata sandi baru tidak cocok.");
+        return;
+      }
+      setLoading(true);
+      try {
+        await updatePassword(password);
+        setSuccess("Kata sandi berhasil diperbarui! Silakan masuk dengan kata sandi baru Anda.");
+        setMode("login");
         setPassword("");
         setConfirmPassword("");
-      } else {
-        await login(email, password);
+        window.history.replaceState(null, "", window.location.pathname);
+      } catch (err: any) {
+        setError(translateAuthError(err));
+      } finally {
+        setLoading(false);
       }
-    } catch (err: any) {
-      setError(err.message || "Terjadi kesalahan");
-    } finally {
-      setLoading(false);
+      return;
     }
-  };
 
-  const handleGoogleLogin = async () => {
-    setError("");
-    setSuccess("");
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError("Silakan masukkan alamat email.");
+      return;
+    }
+
+    // Save or remove remembered email
+    if (rememberMe) {
+      localStorage.setItem(STORAGE_REMEMBERED_EMAIL, cleanEmail);
+    } else {
+      localStorage.removeItem(STORAGE_REMEMBERED_EMAIL);
+    }
+
+    if (mode === "forgot") {
+      setLoading(true);
+      try {
+        await resetPassword(cleanEmail);
+        setSuccess("Tautan reset kata sandi telah dikirim ke email Anda. Silakan periksa kotak masuk atau spam.");
+      } catch (err: any) {
+        setError(translateAuthError(err));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    if (mode === "register") {
+      if (password.length < 6) {
+        setError("Kata sandi minimal harus terdiri dari 6 karakter.");
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError("Konfirmasi kata sandi tidak cocok.");
+        return;
+      }
+
+      setLoading(true);
+      try {
+        await register(cleanEmail, password);
+        setSuccess("Pendaftaran berhasil! Silakan periksa email Anda untuk tautan verifikasi akun.");
+        setPassword("");
+        setConfirmPassword("");
+      } catch (err: any) {
+        setError(translateAuthError(err));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    // Mode: Login
+    if (!password) {
+      setError("Silakan masukkan kata sandi.");
+      return;
+    }
+
     setLoading(true);
     try {
-      await login();
+      await login(cleanEmail, password);
+      // Login successful, reset fail count
+      clearRateLimit();
     } catch (err: any) {
-      setError(err.message || "Terjadi kesalahan");
+      const errorMsg = err?.message || "";
+      if (errorMsg.includes("Invalid login credentials") || errorMsg.includes("invalid_credentials")) {
+        handleRateLimitFailure();
+      } else {
+        setError(translateAuthError(err));
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  const isLocked = lockoutRemaining > 0;
+  const isPasswordMismatch = (mode === "register" || mode === "reset") && confirmPassword && password !== confirmPassword;
+  const isPasswordValid = (mode === "login" || mode === "forgot") ? true : password.length >= 6;
+
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-bg-deep relative overflow-hidden">
-      {/* Background Decor */}
-      <div className="absolute top-1/4 right-1/4 w-[500px] h-[500px] bg-brand-blue/5 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-1/4 left-1/4 w-[400px] h-[400px] bg-brand-purple/5 rounded-full blur-[100px] pointer-events-none" />
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 bg-bg-deep relative overflow-hidden selection:bg-brand-blue/30">
+      {/* Dynamic Background Glows */}
+      <div className="absolute top-1/6 right-1/4 w-[500px] h-[500px] bg-brand-blue/10 rounded-full blur-[140px] pointer-events-none" />
+      <div className="absolute bottom-1/6 left-1/4 w-[450px] h-[450px] bg-brand-purple/10 rounded-full blur-[140px] pointer-events-none" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,rgba(5,6,8,0.7)_100%)] pointer-events-none" />
 
       <motion.div
-        initial={{ opacity: 0, y: 10 }}
+        initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
-        className="sophisticated-card w-full max-w-sm p-12 text-center relative z-10"
+        transition={{ duration: 0.3, ease: "easeOut" }}
+        className="w-full max-w-md bg-bg-panel/90 backdrop-blur-xl border border-border-main rounded-2xl p-8 sm:p-10 shadow-2xl relative z-10"
       >
-        <div className="mb-10">
+        {/* Header Branding */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand-blue/10 border border-brand-blue/20 text-brand-blue text-[11px] font-mono mb-3">
+            <Sparkles className="w-3 h-3" />
+            <span>AI English Language Laboratory</span>
+          </div>
           <h1 className="text-3xl font-serif italic text-white tracking-tight">
             Linguist.AI
           </h1>
-          <p className="academic-label mt-2">Keunggulan Akademik</p>
+          <p className="text-xs text-text-muted mt-1.5 font-medium tracking-wide">
+            {mode === "login" && "Masuk dengan email dan kata sandi Anda"}
+            {mode === "register" && "Buat akun baru untuk mulai latihan dan evaluasi AI"}
+            {mode === "forgot" && "Atur ulang kata sandi akun Anda"}
+            {mode === "reset" && "Buat kata sandi baru untuk akun Anda"}
+          </p>
         </div>
 
-        <div className="space-y-8">
-          <p className="text-xs text-text-dim leading-relaxed tracking-wide">
-            {isRegister
-              ? "Daftar akun baru untuk mengakses lingkungan Riset AI."
-              : "Masuk dengan akun Anda untuk mengakses lingkungan Riset AI."}
-          </p>
-
-          {/* Toggle Login/Register */}
-          <div className="flex bg-white/5 rounded-lg p-1">
+        {/* Tab Switcher (Login / Register) */}
+        {mode !== "forgot" && mode !== "reset" ? (
+          <div className="flex bg-bg-nav p-1 rounded-xl border border-border-main mb-6">
             <button
-              onClick={() => {
-                setIsRegister(false);
-                setError("");
-                setSuccess("");
-              }}
-              className={`flex-1 py-2 px-4 rounded-md text-xs font-medium transition-all ${
-                !isRegister
-                  ? "bg-white text-bg-deep"
-                  : "text-text-dim hover:text-white"
+              type="button"
+              onClick={() => switchMode("login")}
+              className={`flex-1 py-2 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-2 ${
+                mode === "login"
+                  ? "bg-white text-bg-deep shadow-md font-semibold"
+                  : "text-text-muted hover:text-white"
               }`}
             >
+              <LogIn className="w-3.5 h-3.5" />
               Masuk
             </button>
             <button
-              onClick={() => {
-                setIsRegister(true);
-                setError("");
-                setSuccess("");
-              }}
-              className={`flex-1 py-2 px-4 rounded-md text-xs font-medium transition-all ${
-                isRegister
-                  ? "bg-white text-bg-deep"
-                  : "text-text-dim hover:text-white"
+              type="button"
+              onClick={() => switchMode("register")}
+              className={`flex-1 py-2 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-2 ${
+                mode === "register"
+                  ? "bg-white text-bg-deep shadow-md font-semibold"
+                  : "text-text-muted hover:text-white"
               }`}
             >
-              Daftar
+              <UserPlus className="w-3.5 h-3.5" />
+              Daftar Akun
             </button>
           </div>
+        ) : (
+          <div className="mb-6">
+            <button
+              type="button"
+              onClick={() => switchMode("login")}
+              className="inline-flex items-center gap-2 text-xs text-brand-blue hover:text-brand-blue/80 transition-colors font-medium"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              Kembali ke halaman masuk
+            </button>
+          </div>
+        )}
 
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-4">
+        {/* Lockout Banner (Rate Limiting) */}
+        {isLocked && (
+          <div className="mb-5 flex items-center gap-3 p-4 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs">
+            <Clock className="w-5 h-5 text-amber-400 shrink-0 animate-pulse" />
+            <div>
+              <p className="font-semibold text-amber-200">Akses Masuk Dibatasi</p>
+              <p className="text-amber-300/90 mt-0.5">
+                Salah kata sandi 3x berturut-turut. Tunggu{" "}
+                <span className="font-mono font-bold text-white bg-amber-500/30 px-1.5 py-0.5 rounded">
+                  {lockoutRemaining} detik
+                </span>{" "}
+                sebelum mencoba lagi.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Alerts */}
+        <AnimatePresence mode="wait">
+          {error && !isLocked && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mb-5 flex items-start gap-3 p-3.5 rounded-xl bg-red-500/10 border border-red-500/25 text-red-300 text-xs leading-relaxed"
+            >
+              <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <div className="flex-1">{error}</div>
+            </motion.div>
+          )}
+
+          {success && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mb-5 flex items-start gap-3 p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-xs leading-relaxed"
+            >
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              <div className="flex-1">{success}</div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Main Form */}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Email Input (Hidden in 'reset' mode) */}
+          {mode !== "reset" && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block text-left">
+                Alamat Email
+              </label>
               <div className="relative">
-                <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-text-muted" />
+                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                 <input
                   type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Email"
-                  className="w-full bg-white/5 border border-border-main rounded-lg py-3 pl-10 pr-4 text-sm placeholder-text-muted focus:outline-none focus:border-brand-blue transition-colors"
                   required
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (error) setError("");
+                  }}
+                  placeholder="nama@email.com"
+                  disabled={loading || isLocked}
+                  className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue focus:ring-1 focus:ring-brand-blue/30 transition-all disabled:opacity-50"
                 />
               </div>
+            </div>
+          )}
 
+          {/* Password Input (Hidden in 'forgot' mode) */}
+          {mode !== "forgot" && (
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center">
+                <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block">
+                  {mode === "reset" ? "Kata Sandi Baru" : "Kata Sandi"}
+                </label>
+                {mode === "login" && (
+                  <button
+                    type="button"
+                    onClick={() => switchMode("forgot")}
+                    className="text-[11px] text-brand-blue hover:text-brand-blue/80 hover:underline transition-colors"
+                  >
+                    Lupa kata sandi?
+                  </button>
+                )}
+              </div>
               <div className="relative">
-                <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-text-muted" />
+                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                 <input
                   type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Password"
-                  className="w-full bg-white/5 border border-border-main rounded-lg py-3 pl-10 pr-12 text-sm placeholder-text-muted focus:outline-none focus:border-brand-blue transition-colors"
                   required
+                  autoComplete={mode === "login" ? "current-password" : "new-password"}
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (error) setError("");
+                  }}
+                  placeholder="••••••••"
+                  disabled={loading || isLocked}
+                  className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-11 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue focus:ring-1 focus:ring-brand-blue/30 transition-all disabled:opacity-50"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-text-muted hover:text-white transition-colors"
+                  aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-white transition-colors p-1"
                 >
-                  {showPassword ? (
-                    <EyeOff className="w-4 h-4" />
-                  ) : (
-                    <Eye className="w-4 h-4" />
-                  )}
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
 
-              {isRegister && (
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-text-muted" />
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Konfirmasi Password"
-                    className="w-full bg-white/5 border border-border-main rounded-lg py-3 pl-10 pr-4 text-sm placeholder-text-muted focus:outline-none focus:border-brand-blue transition-colors"
-                    required
-                  />
+              {(mode === "register" || mode === "reset") && (
+                <div className="flex items-center gap-2 pt-1 text-[11px]">
+                  <span
+                    className={`${
+                      password.length >= 6 ? "text-emerald-400" : "text-text-muted"
+                    }`}
+                  >
+                    • Minimal 6 karakter
+                  </span>
                 </div>
               )}
             </div>
+          )}
 
-            {error && (
-              <div className="text-red-400 text-xs text-center bg-red-500/10 border border-red-500/20 rounded-lg py-2">
-                {error}
+          {/* Confirm Password (only in 'register' or 'reset' mode) */}
+          {(mode === "register" || mode === "reset") && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block text-left">
+                {mode === "reset" ? "Konfirmasi Kata Sandi Baru" : "Konfirmasi Kata Sandi"}
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                <input
+                  type={showConfirmPassword ? "text" : "password"}
+                  required
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => {
+                    setConfirmPassword(e.target.value);
+                    if (error) setError("");
+                  }}
+                  placeholder="Ulangi kata sandi"
+                  disabled={loading}
+                  className={`w-full bg-bg-nav border rounded-xl py-2.5 pl-10 pr-11 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:ring-1 transition-all disabled:opacity-50 ${
+                    isPasswordMismatch
+                      ? "border-red-500/50 focus:border-red-500 focus:ring-red-500/30"
+                      : "border-border-main focus:border-brand-blue focus:ring-brand-blue/30"
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  aria-label={showConfirmPassword ? "Sembunyikan password" : "Tampilkan password"}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-white transition-colors p-1"
+                >
+                  {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
-            )}
+              {isPasswordMismatch && (
+                <p className="text-[11px] text-red-400 text-left">Kata sandi tidak cocok</p>
+              )}
+            </div>
+          )}
 
-            {success && (
-              <div className="text-emerald-300 text-xs text-center bg-emerald-500/10 border border-emerald-500/20 rounded-lg py-2">
-                {success}
-              </div>
+          {/* Remember Me Checkbox (only in 'login' mode) */}
+          {mode === "login" && (
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                id="rememberMe"
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="w-4 h-4 rounded border-border-main bg-bg-nav text-brand-blue focus:ring-0 focus:ring-offset-0 cursor-pointer accent-brand-blue"
+              />
+              <label
+                htmlFor="rememberMe"
+                className="text-xs text-text-muted hover:text-text-dim cursor-pointer select-none"
+              >
+                Ingat email saya di perangkat ini
+              </label>
+            </div>
+          )}
+
+          {/* Submit Button */}
+          <button
+            type="submit"
+            disabled={loading || isLocked || !isPasswordValid || isPasswordMismatch}
+            className="w-full mt-3 bg-brand-blue hover:bg-brand-blue/90 disabled:opacity-50 disabled:cursor-not-allowed border border-brand-blue/50 text-white font-medium py-3 px-4 rounded-xl text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-brand-blue/10 active:scale-[0.99]"
+          >
+            {loading ? (
+              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : mode === "login" ? (
+              <>
+                <LogIn className="w-4 h-4" />
+                {isLocked ? `Dibatasi (${lockoutRemaining}s)` : "Masuk Sekarang"}
+              </>
+            ) : mode === "register" ? (
+              <>
+                <UserPlus className="w-4 h-4" />
+                Buat Akun Baru
+              </>
+            ) : mode === "reset" ? (
+              <>
+                <KeyRound className="w-4 h-4" />
+                Simpan Kata Sandi Baru
+              </>
+            ) : (
+              <>
+                <KeyRound className="w-4 h-4" />
+                Kirim Tautan Reset
+              </>
             )}
+          </button>
+        </form>
+
+        {/* Mode Pengunjung (Tanpa Registrasi) */}
+        {mode !== "reset" && (
+          <div className="mt-6 pt-6 border-t border-border-main/80">
+            <div className="relative mb-4 text-center">
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-bg-panel px-3 text-[10px] text-text-muted font-mono tracking-widest">
+                  Atau Akses Cepat
+                </span>
+              </div>
+            </div>
 
             <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-brand-blue hover:bg-brand-blue/80 disabled:opacity-50 disabled:cursor-not-allowed border border-brand-blue py-3 rounded-lg text-sm font-medium uppercase tracking-widest transition-all flex items-center justify-center gap-3 active:scale-95"
+              type="button"
+              onClick={() => loginAsGuest()}
+              className="w-full py-2.5 px-4 rounded-xl border border-brand-purple/30 hover:border-brand-purple/60 bg-brand-purple/10 hover:bg-brand-purple/20 text-white font-medium text-xs transition-all flex items-center justify-center gap-2.5 shadow-sm group active:scale-[0.99]"
             >
-              {loading ? (
-                <div className="w-4 h-4 border border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <>
-                  {isRegister ? (
-                    <UserPlus className="w-4 h-4" />
-                  ) : (
-                    <LogIn className="w-4 h-4" />
-                  )}
-                  {isRegister ? "Daftar" : "Masuk"}
-                </>
-              )}
+              <Compass className="w-4 h-4 text-brand-purple group-hover:rotate-45 transition-transform" />
+              <span>Masuk sebagai Pengunjung (Mode Tamu)</span>
             </button>
-          </form>
-
-          {/* Divider */}
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-border-main"></div>
-            </div>
-            <div className="relative flex justify-center text-xs">
-              <span className="px-2 bg-bg-deep text-text-muted">atau</span>
-            </div>
+            <p className="text-[10px] text-text-muted text-center mt-2 leading-relaxed">
+              Langsung coba semua modul AI dan laboratorium tanpa perlu daftar akun.
+            </p>
           </div>
+        )}
 
-          {/* Google Login */}
-          <button
-            onClick={handleGoogleLogin}
-            disabled={loading}
-            className="w-full bg-[#111318] border border-border-main py-3 rounded text-xs font-medium uppercase tracking-widest hover:bg-white/[0.03] disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-3 active:scale-95"
-          >
-            <div className="w-4 h-4 bg-white rounded-full flex items-center justify-center overflow-hidden grayscale">
-              <img
-                src="https://www.google.com/favicon.ico"
-                alt="G"
-                className="w-2.5 h-2.5"
-              />
-            </div>
-            Masuk dengan Google
-          </button>
+        {/* Footer */}
+        <div className="mt-8 pt-6 border-t border-border-main/80 text-center text-[10px] text-text-muted tracking-wider">
+          <span>Linguist.AI &copy; 2026</span>
         </div>
-
-        <footer className="mt-16 pt-8 border-t border-border-main text-[9px] uppercase tracking-[0.3em] text-text-muted">
-          Divisi Bahasa AI &copy; 2026
-        </footer>
       </motion.div>
     </div>
   );

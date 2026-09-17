@@ -1,13 +1,6 @@
 import { useEffect, useState } from 'react';
-import { ExternalLink } from 'lucide-react';
-import { fetchRecommendations, saveRecommendations, type YouTubeRecommendationRow } from '../lib/submissions';
-
-/**
- * Rekomendasi YouTube berbasis hasil analisis (weakness/topic dari Gemini).
- * - Cek dulu apakah rekomendasi untuk submission ini sudah tersimpan (hemat quota YouTube).
- * - Jika belum, panggil endpoint server /api/youtube-recommendations (API key di server).
- * - Simpan hasilnya ke tabel youtube_recommendations (RLS: user_id = auth.uid()).
- */
+import { ExternalLink, Shuffle, Video as VideoIcon } from 'lucide-react';
+import { fetchRecommendations, saveRecommendations } from '../lib/submissions';
 
 interface Video {
   video_id: string;
@@ -30,139 +23,148 @@ export default function YouTubeRecommendations({ submissionId, topic, subtopic, 
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  useEffect(() => {
-    let cancelled = false;
+  const fetchVideos = async (forceShuffle = false) => {
+    if (!query.trim()) return;
+    setLoading(true);
+    setError('');
 
-    async function load() {
-      if (!query.trim()) return;
-      setLoading(true);
-      setError('');
-      setVideos([]);
-
-      try {
-        // 1. Pakai rekomendasi tersimpan jika ada (efisiensi quota)
-        if (submissionId) {
-          const saved = await fetchRecommendations(submissionId);
-          if (cancelled) return;
-          if (saved.length > 0) {
-            setVideos(saved.map(r => ({
+    try {
+      // 1. Cek rekomendasi tersimpan jika bukan shuffle manual
+      if (submissionId && !forceShuffle) {
+        const saved = await fetchRecommendations(submissionId);
+        if (saved && saved.length > 0) {
+          setVideos(
+            saved.map((r) => ({
               video_id: r.video_id,
               title: r.title,
               channel_title: r.channel_title,
               thumbnail_url: r.thumbnail_url,
               description: r.description,
               published_at: r.published_at,
-            })));
-            setLoading(false);
-            return;
-          }
-        }
-
-        // 2. Belum ada -> cari via server (YouTube Data API v3)
-        const res = await fetch('/api/youtube-recommendations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, maxResults: 6 }),
-        });
-        const json = await res.json();
-        if (cancelled) return;
-
-        if (!res.ok || !Array.isArray(json.videos)) {
-          setError(json?.error || 'Rekomendasi video belum dapat dimuat. Silakan coba lagi.');
+            }))
+          );
+          setLoading(false);
           return;
         }
-
-        setVideos(json.videos as Video[]);
-
-        // 3. Simpan ke Supabase untuk pemakaian berikutnya
-        if (submissionId && userId) {
-          try {
-            await saveRecommendations(
-              (json.videos as Video[]).map(v => ({
-                submission_id: submissionId,
-                topic,
-                subtopic,
-                query,
-                video_id: v.video_id,
-                title: v.title,
-                channel_title: v.channel_title,
-                thumbnail_url: v.thumbnail_url,
-                description: v.description,
-                published_at: v.published_at,
-                user_id: userId,
-              }))
-            );
-          } catch (e) {
-            console.error('Gagal menyimpan rekomendasi:', e);
-          }
-        }
-      } catch (e) {
-        if (!cancelled) setError('Rekomendasi video belum dapat dimuat. Silakan coba lagi.');
-      } finally {
-        if (!cancelled) setLoading(false);
       }
-    }
 
-    load();
-    return () => { cancelled = true; };
-  }, [submissionId, query]);
+      // 2. Cari via server (YouTube Data API v3 dengan query acak AI)
+      const res = await fetch('/api/youtube-recommendations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, maxResults: 6 }),
+      });
+      const json = await res.json();
+
+      if (!res.ok || !Array.isArray(json.videos)) {
+        setError(json?.error || 'Rekomendasi video belum dapat dimuat.');
+        return;
+      }
+
+      setVideos(json.videos as Video[]);
+
+      // 3. Simpan ke database jika ada submissionId
+      if (submissionId && userId) {
+        try {
+          await saveRecommendations(
+            (json.videos as Video[]).map((v) => ({
+              submission_id: submissionId,
+              topic,
+              subtopic,
+              query,
+              video_id: v.video_id,
+              title: v.title,
+              channel_title: v.channel_title,
+              thumbnail_url: v.thumbnail_url,
+              description: v.description,
+              published_at: v.published_at,
+              user_id: userId,
+            }))
+          );
+        } catch (e) {
+          // ignore
+        }
+      }
+    } catch (e) {
+      setError('Rekomendasi video belum dapat dimuat. Silakan coba lagi.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchVideos(false);
+  }, [submissionId, query, refreshKey]);
 
   return (
-    <section className="bg-white border border-gray-200 rounded-lg p-6">
-      <h3 className="text-sm font-semibold text-gray-900">Materi yang Perlu Kamu Pelajari</h3>
-      <p className="mt-1 text-xs text-gray-500">
-        {topic || 'Topik'}
-        {subtopic ? ` — ${subtopic}` : ''}
-      </p>
-      <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-gray-500">Video yang Direkomendasikan</p>
+    <section className="bg-bg-panel/90 border border-border-main rounded-2xl p-5 sm:p-6 shadow-sm space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-main/50 pb-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <VideoIcon className="w-4 h-4 text-brand-blue" />
+            <h3 className="text-sm font-semibold text-white">Video Pembelajaran Terkait (Rekomendasi AI)</h3>
+          </div>
+          <p className="mt-0.5 text-xs text-text-muted">
+            Fokus: <span className="text-brand-blue font-medium">{topic || 'English Practice'}</span>
+            {subtopic ? ` — ${subtopic}` : ''}
+          </p>
+        </div>
 
-      {loading && <p className="mt-3 text-sm text-gray-500">Mencari video pembelajaran yang relevan…</p>}
-      {!loading && error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {/* Tombol Acak Video Rekomendasi */}
+        <button
+          onClick={() => {
+            setRefreshKey((k) => k + 1);
+            fetchVideos(true);
+          }}
+          disabled={loading}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-border-main text-xs font-medium text-text-dim hover:text-white transition-all disabled:opacity-50"
+        >
+          <Shuffle className={`w-3.5 h-3.5 text-brand-blue ${loading ? 'animate-spin' : ''}`} />
+          <span>Acak Video</span>
+        </button>
+      </div>
+
+      {loading && <p className="text-xs text-text-muted py-4">Mencari dan mengacak rekomendasi video yang relevan…</p>}
+      {!loading && error && <p className="text-xs text-amber-400 py-2">{error}</p>}
       {!loading && !error && videos.length === 0 && (
-        <p className="mt-3 text-sm text-gray-500">Belum ditemukan video yang sesuai untuk materi ini.</p>
+        <p className="text-xs text-text-muted py-4">Belum ada video yang sesuai untuk topik ini.</p>
       )}
 
       {!loading && !error && videos.length > 0 && (
-        <ul className="mt-3 space-y-4">
-          {videos.map(v => (
-            <li key={v.video_id} className="flex gap-4">
-              <a
-                href={`https://www.youtube.com/watch?v=${v.video_id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="shrink-0"
-              >
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 pt-1">
+          {videos.map((v) => (
+            <a
+              key={v.video_id}
+              href={`https://www.youtube.com/watch?v=${v.video_id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex flex-col bg-bg-nav/80 hover:bg-white/[0.04] border border-border-main rounded-xl overflow-hidden group transition-all"
+            >
+              <div className="relative aspect-video w-full bg-black/40 overflow-hidden">
                 <img
                   src={v.thumbnail_url}
                   alt={v.title}
-                  className="w-40 h-[90px] object-cover rounded border border-gray-200"
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   loading="lazy"
                 />
-              </a>
-              <div className="min-w-0">
-                <a
-                  href={`https://www.youtube.com/watch?v=${v.video_id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm font-medium text-gray-900 hover:underline line-clamp-2"
-                >
-                  {v.title}
-                </a>
-                <p className="mt-0.5 text-xs text-gray-500">{v.channel_title}</p>
-                <p className="mt-1 text-xs text-gray-500 line-clamp-2">{v.description}</p>
-                <a
-                  href={`https://www.youtube.com/watch?v=${v.video_id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:underline"
-                >
-                  Tonton di YouTube <ExternalLink className="w-3 h-3" />
-                </a>
               </div>
-            </li>
+              <div className="p-3 flex-1 flex flex-col justify-between">
+                <div>
+                  <h4 className="text-xs font-medium text-white group-hover:text-brand-blue transition-colors line-clamp-2 leading-relaxed">
+                    {v.title}
+                  </h4>
+                  <p className="mt-1 text-[11px] text-text-muted truncate">{v.channel_title}</p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-border-main/40 flex items-center justify-between text-[10px] text-brand-blue font-medium">
+                  <span>Tonton di YouTube</span>
+                  <ExternalLink className="w-3 h-3" />
+                </div>
+              </div>
+            </a>
           ))}
-        </ul>
+        </div>
       )}
     </section>
   );

@@ -205,12 +205,21 @@ Aturan penilaian (WAJIB dipatuhi):
 - Setiap error yang ditemukan harus tercantum di kategori yang tepat dengan original/correction/explanation (explanation dalam bahasa Indonesia).
 - Jika sebuah kategori tidak punya error, errors = [] dan score = bobot penuhnya.
 - Gunakan bahasa Indonesia untuk explanation, suggestions, overall_feedback, learning_suggestion.
-- Konsisten: teks yang sama HARUS menghasilkan skor dan kategori yang sama.`;
+- Konsisten: teks yang sama HARUS menghasilkan skor dan kategori yang sama.
+- ATURAN KHUSUS NAMA ORANG & KATA LOKAL:
+  1. Nama orang (misalnya: Budi, Siti, Joko, Ahmad, Sri, Sarah, John, dsb.), nama tempat/geografis lokal (Jakarta, Bandung, Bali, Surabaya, Indonesia, dsb.), dan kata budaya khas yang tidak memiliki terjemahan langsung bahasa Inggris (seperti: rendang, batik, gamelan, angkot, dsb.) adalah PROPER NOUNS / NAMA DIRI.
+  2. JANGAN PERNAH mendeteksi atau menandai nama orang atau istilah lokal tersebut sebagai kesalahan ejaan (Spelling), kosakata (Vocabulary), maupun tata bahasa (Grammar).
+  3. JANGAN PERNAH mengurangi skor karena kemunculan nama orang atau istilah khas tersebut. Perlakukan kata-kata tersebut sebagai bagian wajar dan valid dalam kalimat bahasa Inggris.`;
 
 const SPEAKING_SCHEMA_PROMPT = `Anda adalah penguji Academic English Speaking yang KETAT dan KONSISTEN.
 Anda menerima transkrip hasil speech-to-text (BUKAN audio). Nilai KEBAHASAAN dari transkrip:
 kelancaran kalimat, struktur, kosakata, ketiadaan filler/repetisi, kejelasan gagasan.
 Karena Anda tidak mendengar audio asli, JANGAN menilai pelafalan fonetis — nilai berbasis teks saja.
+
+ATURAN PENTING MENGENAI NAMA ORANG & KATA LOKAL:
+1. Nama orang (seperti Budi, Siti, Joko, Andi, Ahmad, dsb.), nama tempat lokal (Jakarta, Bandung, Bali, Indonesia, dsb.), serta istilah budaya khas lokal yang tidak memiliki padanan terjemahan bahasa Inggris (seperti rendang, batik, gamelan, dsb.) adalah NAMA DIRI / PROPER NOUNS.
+2. JANGAN PERNAH mendeteksi nama orang atau istilah lokal sebagai kesalahan bahasa Inggris, JANGAN dimasukkan sebagai "filler_words", dan JANGAN mengurangi skor kebahasaan karenanya.
+3. Kalimat seperti "My friend Budi lives in Bandung" atau "I ate rendang yesterday" adalah sepenuhnya valid dan benar secara tata bahasa.
 
 Keluarkan HANYA JSON valid:
 {

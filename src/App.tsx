@@ -7,6 +7,7 @@ import Dashboard from "./pages/Dashboard";
 import WritingExercise from "./pages/WritingExercise";
 import SpeakingExercise from "./pages/SpeakingExercise";
 import Rubric from "./pages/Rubric";
+import VocabularyLab from "./pages/VocabularyLab";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 
 function AppRoutes() {
@@ -35,6 +36,7 @@ function AppRoutes() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/exercise/writing" element={<WritingExercise />} />
         <Route path="/exercise/speaking" element={<SpeakingExercise />} />
+        <Route path="/vocabulary" element={<VocabularyLab />} />
         <Route path="/rubric" element={<Rubric />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
