@@ -8,6 +8,8 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  verifyResetCode: (email: string, token: string) => Promise<void>;
+  setSessionFromUrl: (rawUrlOrHash: string) => Promise<void>;
   updatePassword: (newPassword: string) => Promise<void>;
   loginAsGuest: () => void;
   logout: () => Promise<void>;
@@ -37,6 +39,9 @@ export function translateAuthError(error: any): string {
   }
   if (/network/i.test(msg) || /failed to fetch/i.test(msg)) {
     return "Gagal terhubung ke server. Periksa koneksi internet Anda.";
+  }
+  if (/token.*expired|invalid token|otp.*expired|token is invalid|recovery token/i.test(msg)) {
+    return "Kode verifikasi atau tautan telah kedaluwarsa atau tidak valid. Silakan periksa kembali atau minta tautan baru.";
   }
   if (/user not found/i.test(msg)) {
     return "Akun dengan alamat email ini tidak ditemukan.";
@@ -191,12 +196,58 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const resetPassword = async (email: string) => {
     try {
+      const redirectUrl = `${window.location.origin}/login`;
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: `${window.location.origin}/login`,
+        redirectTo: redirectUrl,
       });
       if (error) throw error;
     } catch (error) {
       console.error("Reset Password Error:", error);
+      throw error;
+    }
+  };
+
+  const verifyResetCode = async (email: string, token: string) => {
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: email.trim(),
+        token: token.trim(),
+        type: 'recovery',
+      });
+      if (error) throw error;
+      if (data?.user) {
+        setUser(data.user);
+      }
+    } catch (error) {
+      console.error("Verify OTP Error:", error);
+      throw error;
+    }
+  };
+
+  const setSessionFromUrl = async (rawUrlOrHash: string) => {
+    try {
+      let hash = rawUrlOrHash.trim();
+      if (hash.includes('#')) {
+        hash = hash.split('#')[1];
+      } else if (hash.includes('?')) {
+        hash = hash.split('?')[1];
+      }
+      const params = new URLSearchParams(hash);
+      const access_token = params.get('access_token');
+      const refresh_token = params.get('refresh_token') || '';
+      if (!access_token) {
+        throw new Error('Tautan tidak memuat token pemulihan yang valid.');
+      }
+      const { data, error } = await supabase.auth.setSession({
+        access_token,
+        refresh_token,
+      });
+      if (error) throw error;
+      if (data?.user) {
+        setUser(data.user);
+      }
+    } catch (error) {
+      console.error("Set Session from URL Error:", error);
       throw error;
     }
   };
@@ -277,6 +328,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         register,
         resetPassword,
+        verifyResetCode,
+        setSessionFromUrl,
         updatePassword,
         loginAsGuest,
         logout,

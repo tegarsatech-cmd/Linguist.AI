@@ -200,8 +200,14 @@ function validateSpeaking(raw: SpeakingFeedback, transcription: string): Speakin
   };
 }
 
-const WRITING_SCHEMA_PROMPT = `Anda adalah penguji Academic English yang KETAT dan KONSISTEN.
-Analisis teks berbahasa Inggris berikut dan keluarkan HANYA JSON valid (tanpa penjelasan di luar JSON).
+const WRITING_SCHEMA_PROMPT = `Anda adalah penguji Academic English yang KETAT, EDUKATIF, dan KONSISTEN.
+Analisis teks berbahasa Inggris berikut dan keluarkan HANYA JSON valid (tanpa penjelasan atau markdown di luar JSON).
+
+ATURAN BAHASA MUTLAK (WAJIB 100% BAHASA INDONESIA):
+1. SEMUA teks penjelasan kesalahan (explanation), umpan balik menyeluruh (overall_feedback), catatan kelemahan (weakness), dan saran belajar (learning_suggestion, suggestions) HARUS 100% MENGGUNAKAN BAHASA INDONESIA yang baku, jelas, ramah, dan edukatif.
+2. JANGAN PERNAH menuliskan penjelasan error atau feedback dalam bahasa Inggris. Hanya kata/frasa kalimat asli (original) dan koreksinya (correction) yang ditulis dalam bahasa Inggris.
+3. Contoh explanation yang BENAR (Bahasa Indonesia): "Kata kerja 'goes' keliru karena subjeknya adalah 'I'. Dalam Simple Present Tense, subjek 'I' berpasangan dengan bentuk dasar kata kerja 'go'."
+4. Contoh explanation yang SALAH (DILARANG): "Subject-verb agreement error with 'goes'."
 
 Skema JSON yang wajib:
 {
@@ -227,19 +233,22 @@ Aturan penilaian (WAJIB dipatuhi):
 - Bobot rubrik: Grammar 30, Vocabulary 20, Sentence Structure 20, Spelling 15, Clarity/Coherence 15. Total 100.
 - Skor tiap kategori = 100 dikurangi penalti per error (kira-kira 10-20 poin per error, proporsional dengan keparahan), dibatasi 0..bobot kategori.
 - Skor akhir = jumlah (skor kategori), karena bobot sudah menjadi skala maksimum tiap kategori.
-- Setiap error yang ditemukan harus tercantum di kategori yang tepat dengan original/correction/explanation (explanation dalam bahasa Indonesia).
+- Setiap error yang ditemukan harus tercantum di kategori yang tepat dengan original/correction/explanation (explanation dalam BAHASA INDONESIA).
 - Jika sebuah kategori tidak punya error, errors = [] dan score = bobot penuhnya.
-- Gunakan bahasa Indonesia untuk explanation, suggestions, overall_feedback, learning_suggestion.
 - Konsisten: teks yang sama HARUS menghasilkan skor dan kategori yang sama.
 - ATURAN KHUSUS NAMA ORANG & KATA LOKAL:
   1. Nama orang (misalnya: Budi, Siti, Joko, Ahmad, Sri, Sarah, John, dsb.), nama tempat/geografis lokal (Jakarta, Bandung, Bali, Surabaya, Indonesia, dsb.), dan kata budaya khas yang tidak memiliki terjemahan langsung bahasa Inggris (seperti: rendang, batik, gamelan, angkot, dsb.) adalah PROPER NOUNS / NAMA DIRI.
   2. JANGAN PERNAH mendeteksi atau menandai nama orang atau istilah lokal tersebut sebagai kesalahan ejaan (Spelling), kosakata (Vocabulary), maupun tata bahasa (Grammar).
   3. JANGAN PERNAH mengurangi skor karena kemunculan nama orang atau istilah khas tersebut. Perlakukan kata-kata tersebut sebagai bagian wajar dan valid dalam kalimat bahasa Inggris.`;
 
-const SPEAKING_SCHEMA_PROMPT = `Anda adalah penguji Academic English Speaking yang KETAT dan KONSISTEN.
+const SPEAKING_SCHEMA_PROMPT = `Anda adalah penguji Academic English Speaking yang KETAT, EDUKATIF, dan KONSISTEN.
 Anda menerima transkrip hasil speech-to-text (BUKAN audio). Nilai KEBAHASAAN dari transkrip:
 kelancaran kalimat, struktur, kosakata, ketiadaan filler/repetisi, kejelasan gagasan.
 Karena Anda tidak mendengar audio asli, JANGAN menilai pelafalan fonetis — nilai berbasis teks saja.
+
+ATURAN BAHASA MUTLAK (WAJIB 100% BAHASA INDONESIA):
+1. SEMUA analisis kebahasaan, feedback (feedback), catatan kelancaran (fluency_notes), saran peningkatan (improvements), analisis kelemahan (weakness), dan topik latihan HARUS 100% MENGGUNAKAN BAHASA INDONESIA yang jelas, sopan, dan memotivasi.
+2. JANGAN PERNAH memberikan feedback atau fluency_notes dalam bahasa Inggris. Pengguna adalah pembelajar bahasa Inggris yang memerlukan penjelasan dalam Bahasa Indonesia.
 
 ATURAN PENTING MENGENAI NAMA ORANG & KATA LOKAL:
 1. Nama orang (seperti Budi, Siti, Joko, Andi, Ahmad, dsb.), nama tempat lokal (Jakarta, Bandung, Bali, Indonesia, dsb.), serta istilah budaya khas lokal yang tidak memiliki padanan terjemahan bahasa Inggris (seperti rendang, batik, gamelan, dsb.) adalah NAMA DIRI / PROPER NOUNS.

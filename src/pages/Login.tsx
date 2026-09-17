@@ -14,6 +14,8 @@ import {
   Sparkles,
   Clock,
   Compass,
+  Key,
+  Link2,
 } from "lucide-react";
 import { useAuth, translateAuthError } from "../contexts/AuthContext";
 
@@ -25,7 +27,15 @@ const STORAGE_LOCKOUT_LEVEL = "linguist_login_lockout_level";
 const STORAGE_REMEMBERED_EMAIL = "linguist_saved_email";
 
 export default function Login() {
-  const { login, register, resetPassword, updatePassword, loginAsGuest } = useAuth();
+  const {
+    login,
+    register,
+    resetPassword,
+    verifyResetCode,
+    setSessionFromUrl,
+    updatePassword,
+    loginAsGuest,
+  } = useAuth();
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,6 +46,11 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  // OTP & Direct Link Verification States (untuk mengatasi masalah tautan email localhost)
+  const [otpCode, setOtpCode] = useState("");
+  const [pastedLink, setPastedLink] = useState("");
+  const [isVerifyingManual, setIsVerifyingManual] = useState(false);
 
   // Rate Limiting States
   const [failCount, setFailCount] = useState(0);
@@ -177,7 +192,9 @@ export default function Login() {
       setLoading(true);
       try {
         await resetPassword(cleanEmail);
-        setSuccess("Tautan reset kata sandi telah dikirim ke email Anda. Silakan periksa kotak masuk atau spam.");
+        setSuccess(
+          "Tautan reset kata sandi telah dikirim ke email Anda! Jika tautan di email mengarah ke localhost atau tidak dapat dibuka di HP, gunakan formulir verifikasi kode/link di bawah."
+        );
       } catch (err: any) {
         setError(translateAuthError(err));
       } finally {
@@ -230,6 +247,40 @@ export default function Login() {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleManualVerification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setSuccess("");
+
+    if (!otpCode.trim() && !pastedLink.trim()) {
+      setError("Silakan masukkan kode 6-digit dari email atau tempelkan tautan email.");
+      return;
+    }
+
+    setIsVerifyingManual(true);
+    try {
+      if (otpCode.trim()) {
+        const cleanEmail = email.trim();
+        if (!cleanEmail) {
+          setError("Silakan masukkan alamat email Anda di atas.");
+          setIsVerifyingManual(false);
+          return;
+        }
+        await verifyResetCode(cleanEmail, otpCode.trim());
+      } else if (pastedLink.trim()) {
+        await setSessionFromUrl(pastedLink.trim());
+      }
+      setMode("reset");
+      setSuccess("Verifikasi berhasil! Silakan masukkan kata sandi baru Anda di bawah ini.");
+      setOtpCode("");
+      setPastedLink("");
+    } catch (err: any) {
+      setError(translateAuthError(err));
+    } finally {
+      setIsVerifyingManual(false);
     }
   };
 
@@ -525,6 +576,68 @@ export default function Login() {
             )}
           </button>
         </form>
+
+        {/* Verifikasi Kode OTP / Tautan Email (Bypass masalah link localhost) */}
+        {mode === "forgot" && (
+          <div className="mt-6 pt-5 border-t border-border-main/80 space-y-3.5 text-left">
+            <div className="flex items-center gap-2 text-white text-xs font-semibold">
+              <Key className="w-4 h-4 text-brand-blue" />
+              <span>Punya Kode Verifikasi atau Link Email?</span>
+            </div>
+            <p className="text-[11px] text-text-muted leading-relaxed">
+              Jika tautan di email Anda mengarah ke <strong className="text-white font-mono">localhost</strong> atau tidak bisa dibuka di HP, masukkan kode OTP 6-angka dari email atau tempelkan link email tersebut di bawah ini:
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono uppercase text-text-dim block mb-1">
+                  1. Masukkan Kode 6-Digit dari Email (OTP)
+                </label>
+                <input
+                  type="text"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  placeholder="Contoh: 849201"
+                  disabled={isVerifyingManual}
+                  className="w-full bg-bg-nav border border-border-main rounded-xl py-2 px-3 text-xs text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono uppercase text-text-dim block mb-1">
+                  2. Atau Tempel Tautan Lengkap dari Email
+                </label>
+                <div className="relative">
+                  <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
+                  <input
+                    type="text"
+                    value={pastedLink}
+                    onChange={(e) => setPastedLink(e.target.value)}
+                    placeholder="http://localhost:3000/#access_token=..."
+                    disabled={isVerifyingManual}
+                    className="w-full bg-bg-nav border border-border-main rounded-xl py-2 pl-9 pr-3 text-xs text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue font-mono"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={isVerifyingManual || (!otpCode.trim() && !pastedLink.trim())}
+                onClick={handleManualVerification}
+                className="w-full bg-white/10 hover:bg-white/15 disabled:opacity-40 border border-white/15 text-white font-medium py-2.5 px-3 rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-sm"
+              >
+                {isVerifyingManual ? (
+                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Verifikasi & Buat Kata Sandi Baru</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Mode Pengunjung (Tanpa Registrasi) */}
         {mode !== "reset" && (
