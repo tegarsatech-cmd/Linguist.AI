@@ -38,6 +38,14 @@ export default function SpeakingExercise() {
   const [feedback, setFeedback] = useState<SpeakingFeedback | null>(null);
   const [analysisError, setAnalysisError] = useState('');
 
+  // Audio level gating (hanya proses audio dengan suara jelas / tidak bisik-bisik/noise pelan)
+  const [audioVolume, setAudioVolume] = useState<number>(0);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const microphoneStreamRef = useRef<MediaStream | null>(null);
+  const volumeAnimRef = useRef<number | null>(null);
+  const isSpeakingLoudEnoughRef = useRef<boolean>(false);
+
   // Saving states
   const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
@@ -47,13 +55,22 @@ export default function SpeakingExercise() {
   const transcriptRef = useRef('');
   const recognitionRef = useRef<any>(null);
 
-  // Bersihkan recognizer saat unmount
+  // Bersihkan audio stream & recognizer saat unmount
   useEffect(() => {
     return () => {
       try {
         recognitionRef.current?.stop();
       } catch {
         // ignore
+      }
+      if (microphoneStreamRef.current) {
+        microphoneStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close();
+      }
+      if (volumeAnimRef.current) {
+        cancelAnimationFrame(volumeAnimRef.current);
       }
     };
   }, []);
@@ -75,6 +92,78 @@ export default function SpeakingExercise() {
     return deduped.join(' ');
   };
 
+  const startAudioVolumeMeter = async () => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) return;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      microphoneStreamRef.current = stream;
+
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const audioCtx = new AudioCtx();
+      audioContextRef.current = audioCtx;
+
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.4;
+      analyserRef.current = analyser;
+
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const checkVolume = () => {
+        if (!analyserRef.current) return;
+        analyserRef.current.getByteFrequencyData(dataArray);
+
+        // Hitung rata-rata amplitudo sinyal suara
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const average = sum / dataArray.length;
+        setAudioVolume(Math.round(average));
+
+        // Ambang batas (Threshold) suara: hanya terima kata jika suara di atas background noise (> 10)
+        // Jika suara terlalu kecil / bisikan / hembusan napas, tandai belum cukup keras
+        if (average >= 12) {
+          isSpeakingLoudEnoughRef.current = true;
+        }
+
+        volumeAnimRef.current = requestAnimationFrame(checkVolume);
+      };
+
+      checkVolume();
+    } catch (e) {
+      console.warn('Audio volume meter not available:', e);
+      // Fallback: selalu izinkan jika mediaDevices tidak tersedia
+      isSpeakingLoudEnoughRef.current = true;
+    }
+  };
+
+  const stopAudioVolumeMeter = () => {
+    if (volumeAnimRef.current) {
+      cancelAnimationFrame(volumeAnimRef.current);
+      volumeAnimRef.current = null;
+    }
+    if (microphoneStreamRef.current) {
+      microphoneStreamRef.current.getTracks().forEach((t) => t.stop());
+      microphoneStreamRef.current = null;
+    }
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    setAudioVolume(0);
+  };
+
   const startRecording = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -87,6 +176,7 @@ export default function SpeakingExercise() {
     } catch {
       // ignore
     }
+    stopAudioVolumeMeter();
 
     setTranscript('');
     transcriptRef.current = '';
@@ -96,6 +186,10 @@ export default function SpeakingExercise() {
     setSavedRow(null);
     setSaveMessage('');
     setIsRecording(true);
+    isSpeakingLoudEnoughRef.current = false;
+
+    // Aktifkan visualizer & gating suara
+    startAudioVolumeMeter();
 
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
@@ -134,6 +228,7 @@ export default function SpeakingExercise() {
 
     recognition.onerror = (event: any) => {
       setIsRecording(false);
+      stopAudioVolumeMeter();
       if (event.error !== 'aborted') {
         setAnalysisError('Pengenalan suara gagal. Silakan periksa izin mikrofon Anda lalu coba lagi.');
       }
@@ -141,6 +236,7 @@ export default function SpeakingExercise() {
 
     recognition.onend = () => {
       setIsRecording(false);
+      stopAudioVolumeMeter();
       // Saat rekaman selesai, pastikan transkrip akhir dibersihkan dari duplikasi
       if (transcriptRef.current) {
         setTranscript(deduplicateSpeech(transcriptRef.current));
@@ -151,6 +247,7 @@ export default function SpeakingExercise() {
       recognition.start();
     } catch (e: any) {
       setIsRecording(false);
+      stopAudioVolumeMeter();
       setAnalysisError('Gagal memulai mikrofon: ' + (e?.message || 'Error tidak diketahui'));
     }
   };
@@ -161,6 +258,7 @@ export default function SpeakingExercise() {
     } catch {
       // ignore
     }
+    stopAudioVolumeMeter();
     setIsRecording(false);
     if (transcriptRef.current) {
       setTranscript(deduplicateSpeech(transcriptRef.current));
@@ -268,9 +366,40 @@ export default function SpeakingExercise() {
         >
           {isRecording ? <Square className="w-8 h-8 text-red-400" /> : <Mic className="w-9 h-9 text-white/90" />}
         </button>
-        <p className="text-xs text-text-muted">
-          {isRecording ? 'Merekam… klik tombol kotak untuk selesai.' : 'Klik mikrofon lalu bicara dalam bahasa Inggris.'}
-        </p>
+
+        {isRecording ? (
+          <div className="flex flex-col items-center gap-2 w-full max-w-xs">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+              <span className="text-xs text-red-400 font-medium">Merekam suara...</span>
+            </div>
+
+            {/* Audio Volume Bar & Sensitivity Indicator */}
+            <div className="w-full space-y-1">
+              <div className="flex justify-between items-center text-[10px] text-text-muted">
+                <span>Volume Suara:</span>
+                <span className={audioVolume >= 12 ? 'text-emerald-400 font-medium' : 'text-amber-400'}>
+                  {audioVolume >= 12 ? 'Suara Jelas (Optimal)' : 'Bicara Lebih Keras'}
+                </span>
+              </div>
+              <div className="w-full h-2 bg-bg-nav rounded-full overflow-hidden border border-border-main/50">
+                <div
+                  className={`h-full transition-all duration-75 rounded-full ${
+                    audioVolume >= 12 ? 'bg-gradient-to-r from-brand-blue to-emerald-400' : 'bg-amber-400/60'
+                  }`}
+                  style={{ width: `${Math.min(100, Math.max(5, (audioVolume / 60) * 100))}%` }}
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-text-muted text-center">
+              Gunakan suara agak besar dan artikulasi jelas agar tidak terdeteksi ganda atau noise.
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-text-muted text-center">
+            Klik mikrofon lalu bicara dengan suara agak besar & jelas dalam bahasa Inggris.
+          </p>
+        )}
 
         {/* Live Transcription Box */}
         <div className="w-full bg-bg-nav/90 border border-border-main rounded-xl p-5 min-h-[110px] mt-2">
@@ -278,7 +407,7 @@ export default function SpeakingExercise() {
           {transcript ? (
             <p className="text-sm text-white/95 italic leading-relaxed">"{transcript}"</p>
           ) : (
-            <p className="text-xs text-text-muted">Transkrip ucapan akan otomatis tertulis di sini saat kamu berbicara.</p>
+            <p className="text-xs text-text-muted">Transkrip ucapan akan otomatis tertulis di sini saat kamu berbicara dengan suara cukup jelas.</p>
           )}
         </div>
       </div>

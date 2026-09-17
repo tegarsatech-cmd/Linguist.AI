@@ -35,7 +35,7 @@ export function translateAuthError(error: any): string {
     return "Silakan masukkan kata sandi yang valid.";
   }
   if (/rate limit/i.test(msg) || /over_email_send_rate_limit/i.test(msg)) {
-    return "Terlalu banyak percobaan dalam waktu singkat. Harap tunggu beberapa saat.";
+    return "Layanan email dibatasi sementara karena terlalu banyak permintaan (rate limit Supabase). Silakan periksa inbox/spam email Anda karena tautan/kode verifikasi sebelumnya mungkin sudah masuk, atau coba lagi setelah beberapa menit.";
   }
   if (/network/i.test(msg) || /failed to fetch/i.test(msg)) {
     return "Gagal terhubung ke server. Periksa koneksi internet Anda.";

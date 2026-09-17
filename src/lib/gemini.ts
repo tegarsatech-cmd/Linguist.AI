@@ -236,10 +236,11 @@ Aturan penilaian (WAJIB dipatuhi):
 - Setiap error yang ditemukan harus tercantum di kategori yang tepat dengan original/correction/explanation (explanation dalam BAHASA INDONESIA).
 - Jika sebuah kategori tidak punya error, errors = [] dan score = bobot penuhnya.
 - Konsisten: teks yang sama HARUS menghasilkan skor dan kategori yang sama.
-- ATURAN KHUSUS NAMA ORANG & KATA LOKAL:
-  1. Nama orang (misalnya: Budi, Siti, Joko, Ahmad, Sri, Sarah, John, dsb.), nama tempat/geografis lokal (Jakarta, Bandung, Bali, Surabaya, Indonesia, dsb.), dan kata budaya khas yang tidak memiliki terjemahan langsung bahasa Inggris (seperti: rendang, batik, gamelan, angkot, dsb.) adalah PROPER NOUNS / NAMA DIRI.
-  2. JANGAN PERNAH mendeteksi atau menandai nama orang atau istilah lokal tersebut sebagai kesalahan ejaan (Spelling), kosakata (Vocabulary), maupun tata bahasa (Grammar).
-  3. JANGAN PERNAH mengurangi skor karena kemunculan nama orang atau istilah khas tersebut. Perlakukan kata-kata tersebut sebagai bagian wajar dan valid dalam kalimat bahasa Inggris.`;
+- ATURAN KHUSUS NAMA ORANG, ALAMAT, LOKASI & KATA LOKAL:
+  1. NAMA ORANG (misalnya: Tegar, Budi, Siti, Joko, Ahmad, Sri, Sarah, John, dsb.), ALAMAT & NAMA TEMPAT/GEOGRAFIS LOKAL (Jalan Sudirman, Blok M, Jakarta, Bandung, Bali, Surabaya, Indonesia, dsb.), dan KATA BUDAYA KHAS yang tidak memiliki terjemahan langsung bahasa Inggris (seperti: rendang, batik, gamelan, angkot, warung, dsb.) adalah NAMA DIRI / PROPER NOUNS & UNTRANSLATABLE WORDS.
+  2. JANGAN PERNAH mendeteksi atau menandai nama orang, alamat, nama jalan/kota, atau istilah lokal tersebut sebagai kesalahan ejaan (Spelling), kosakata (Vocabulary), maupun tata bahasa (Grammar).
+  3. JANGAN PERNAH mengurangi skor karena kemunculan nama orang atau istilah khas tersebut. Perlakukan kata-kata tersebut sebagai bagian wajar dan valid dalam kalimat bahasa Inggris.
+  4. JIKA seluruh teks HANYA berisi nama orang atau alamat Indonesia tanpa ada kalimat bahasa Inggris: beri skor 0 dengan feedback penjelasan ramah dalam bahasa Indonesia bahwa teks belum memuat kalimat bahasa Inggris yang dapat dievaluasi.`;
 
 const SPEAKING_SCHEMA_PROMPT = `Anda adalah penguji Academic English Speaking yang KETAT, EDUKATIF, dan KONSISTEN.
 Anda menerima transkrip hasil speech-to-text (BUKAN audio). Nilai KEBAHASAAN dari transkrip:
@@ -250,10 +251,18 @@ ATURAN BAHASA MUTLAK (WAJIB 100% BAHASA INDONESIA):
 1. SEMUA analisis kebahasaan, feedback (feedback), catatan kelancaran (fluency_notes), saran peningkatan (improvements), analisis kelemahan (weakness), dan topik latihan HARUS 100% MENGGUNAKAN BAHASA INDONESIA yang jelas, sopan, dan memotivasi.
 2. JANGAN PERNAH memberikan feedback atau fluency_notes dalam bahasa Inggris. Pengguna adalah pembelajar bahasa Inggris yang memerlukan penjelasan dalam Bahasa Indonesia.
 
-ATURAN PENTING MENGENAI NAMA ORANG & KATA LOKAL:
-1. Nama orang (seperti Budi, Siti, Joko, Andi, Ahmad, dsb.), nama tempat lokal (Jakarta, Bandung, Bali, Indonesia, dsb.), serta istilah budaya khas lokal yang tidak memiliki padanan terjemahan bahasa Inggris (seperti rendang, batik, gamelan, dsb.) adalah NAMA DIRI / PROPER NOUNS.
-2. JANGAN PERNAH mendeteksi nama orang atau istilah lokal sebagai kesalahan bahasa Inggris, JANGAN dimasukkan sebagai "filler_words", dan JANGAN mengurangi skor kebahasaan karenanya.
-3. Kalimat seperti "My friend Budi lives in Bandung" atau "I ate rendang yesterday" adalah sepenuhnya valid dan benar secara tata bahasa.
+ATURAN PENTING MENGENAI NAMA ORANG, ALAMAT, LOKASI & KATA TANPA TERJEMAHAN INGGRIS:
+1. NAMA ORANG (seperti: Tegar, Budi, Siti, Joko, Andi, Ahmad, Rizky, Nurul, dsb.), ALAMAT & NAMA LOKASI/TEMPAT (seperti: Jalan Sudirman, RT/RW, Jakarta, Bandung, Bali, Surabaya, Medan, Indonesia, dsb.), serta KATA/ISTILAH KHAS yang TIDAK MEMILIKI TERJEMAHAN BAHASA INGGRIS (seperti: rendang, batik, nasi goreng, gamelan, angkot, warung, dsb.) adalah NAMA DIRI / ENTITAS ASLI (PROPER NOUNS & UNTRANSLATABLE TERMS).
+2. JANGAN PERNAH mendeteksi atau menganggap nama orang, alamat, jalan, kota, maupun istilah lokal tersebut sebagai kesalahan berbahasa Inggris.
+3. JANGAN PERNAH memasukkannya ke dalam daftar "filler_words" atau menilainya sebagai salah eja / salah gramatika.
+4. JANGAN PERNAH mengurangi skor kelancaran atau kebahasaan karena keberadaan nama diri / lokasi / istilah lokal tersebut.
+5. JIKA seluruh transkrip HANYA berisi nama orang, alamat Indonesia, atau kata bahasa Indonesia tanpa ada kalimat bahasa Inggris (contoh: "tegar", "jalan jenderal sudirman bandung", "budi santoso"):
+   - Berikan score: 0
+   - feedback: "Transkrip yang terdeteksi hanya berisi nama orang, alamat, atau kata bahasa lokal tanpa struktur kalimat bahasa Inggris. Silakan ucapkan kalimat lengkap dalam bahasa Inggris untuk dievaluasi."
+   - fluency_notes: "Tidak terdeteksi penggunaan kalimat bahasa Inggris."
+   - weakness: "Belum berbicara dalam kalimat bahasa Inggris."
+   - improvements: ["Gunakan kalimat bahasa Inggris seperti: 'My name is Tegar and I live in Jakarta'"]
+6. Kalimat campuran yang wajar seperti "My name is Tegar and I live on Jalan Sudirman Bandung" atau "I ate rendang with Budi" adalah SEPENUHNYA VALID, BENAR, dan TIDAK BOLEH dikurangi nilainya.
 
 Keluarkan HANYA JSON valid:
 {
