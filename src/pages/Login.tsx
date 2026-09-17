@@ -52,9 +52,12 @@ export default function Login() {
   const [pastedLink, setPastedLink] = useState("");
   const [isVerifyingManual, setIsVerifyingManual] = useState(false);
 
-  // Rate Limiting States
+  // Rate Limiting States (Login)
   const [failCount, setFailCount] = useState(0);
   const [lockoutRemaining, setLockoutRemaining] = useState(0); // seconds
+
+  // Rate Limiting States (Kirim Tautan Reset Sandi: 60 detik cooldown)
+  const [resetCooldown, setResetCooldown] = useState(0); // seconds
 
   // Deteksi tautan reset kata sandi dari email Supabase (Recovery Token)
   useEffect(() => {
@@ -82,11 +85,16 @@ export default function Login() {
     if (lockoutUntil > now) {
       setLockoutRemaining(Math.ceil((lockoutUntil - now) / 1000));
     }
+
+    const resetCooldownUntil = parseInt(localStorage.getItem("linguist_reset_cooldown_until") || "0", 10);
+    if (resetCooldownUntil > now) {
+      setResetCooldown(Math.ceil((resetCooldownUntil - now) / 1000));
+    }
   }, []);
 
-  // Timer interval for rate limiting countdown
+  // Timer interval for rate limiting countdown & reset cooldown countdown
   useEffect(() => {
-    if (lockoutRemaining <= 0) return;
+    if (lockoutRemaining <= 0 && resetCooldown <= 0) return;
 
     const timer = setInterval(() => {
       setLockoutRemaining((prev) => {
@@ -96,10 +104,18 @@ export default function Login() {
         }
         return prev - 1;
       });
+
+      setResetCooldown((prev) => {
+        if (prev <= 1) {
+          localStorage.removeItem("linguist_reset_cooldown_until");
+          return 0;
+        }
+        return prev - 1;
+      });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [lockoutRemaining]);
+  }, [lockoutRemaining, resetCooldown]);
 
   const switchMode = (newMode: AuthMode) => {
     setMode(newMode);
@@ -189,9 +205,20 @@ export default function Login() {
     }
 
     if (mode === "forgot") {
+      if (resetCooldown > 0) {
+        setError(`Mohon tunggu ${resetCooldown} detik sebelum meminta tautan reset sandi kembali.`);
+        return;
+      }
+
       setLoading(true);
       try {
         await resetPassword(cleanEmail);
+        // Set 60 detik cooldown
+        const cooldownSeconds = 60;
+        const cooldownUntil = Date.now() + cooldownSeconds * 1000;
+        localStorage.setItem("linguist_reset_cooldown_until", cooldownUntil.toString());
+        setResetCooldown(cooldownSeconds);
+
         setSuccess(
           "Tautan reset kata sandi telah dikirim ke email Anda! Jika tautan di email mengarah ke localhost atau tidak dapat dibuka di HP, gunakan formulir verifikasi kode/link di bawah."
         );
@@ -548,7 +575,13 @@ export default function Login() {
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={loading || isLocked || !isPasswordValid || isPasswordMismatch}
+            disabled={
+              loading ||
+              isLocked ||
+              !isPasswordValid ||
+              isPasswordMismatch ||
+              (mode === "forgot" && resetCooldown > 0)
+            }
             className="w-full mt-3 bg-brand-blue hover:bg-brand-blue/90 disabled:opacity-50 disabled:cursor-not-allowed border border-brand-blue/50 text-white font-medium py-3 px-4 rounded-xl text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-brand-blue/10 active:scale-[0.99]"
           >
             {loading ? (
@@ -567,6 +600,11 @@ export default function Login() {
               <>
                 <KeyRound className="w-4 h-4" />
                 Simpan Kata Sandi Baru
+              </>
+            ) : mode === "forgot" && resetCooldown > 0 ? (
+              <>
+                <Clock className="w-4 h-4" />
+                Tunggu {resetCooldown} Detik
               </>
             ) : (
               <>

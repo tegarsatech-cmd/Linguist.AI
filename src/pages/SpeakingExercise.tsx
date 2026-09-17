@@ -58,6 +58,23 @@ export default function SpeakingExercise() {
     };
   }, []);
 
+  // Helper untuk membersihkan kata atau token ganda yang berulang akibat echo / audio sensitivity
+  const deduplicateSpeech = (text: string): string => {
+    if (!text) return '';
+    const words = text.trim().split(/\s+/);
+    const deduped: string[] = [];
+    for (let i = 0; i < words.length; i++) {
+      const current = words[i];
+      const prev = deduped[deduped.length - 1];
+      // Jika kata yang sama persis muncul berturut-turut karena glitch mic, saring
+      if (prev && prev.toLowerCase() === current.toLowerCase()) {
+        continue;
+      }
+      deduped.push(current);
+    }
+    return deduped.join(' ');
+  };
+
   const startRecording = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -85,32 +102,57 @@ export default function SpeakingExercise() {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
+    // Gunakan 1 alternatif terbaik untuk akurasi tertinggi
+    recognition.maxAlternatives = 1;
+
+    // Gunakan array tersegmentasi berdasarkan indeks hasil resmi untuk mencegah double accumulation
+    const finalSegments: string[] = [];
 
     recognition.onresult = (event: any) => {
       let interim = '';
-      let final = '';
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const chunk = event.results[i][0]?.transcript || '';
-        if (event.results[i].isFinal) final += chunk + ' ';
-        else interim += chunk;
+
+      for (let i = 0; i < event.results.length; i += 1) {
+        const resultItem = event.results[i];
+        const piece = (resultItem[0]?.transcript || '').trim();
+        if (!piece) continue;
+
+        if (resultItem.isFinal) {
+          finalSegments[i] = piece;
+        } else {
+          interim = piece;
+        }
       }
-      const current = (transcriptRef.current ? transcriptRef.current + ' ' : '') + (final + interim).trim();
-      transcriptRef.current = final ? transcriptRef.current + ' ' + final.trim() : transcriptRef.current;
-      setTranscript(current.trim());
+
+      // Gabungkan hasil segmen final yang valid
+      const finalizedText = finalSegments.filter(Boolean).join(' ').trim();
+      const combined = finalizedText + (interim ? (finalizedText ? ' ' : '') + interim : '');
+      const cleaned = deduplicateSpeech(combined);
+
+      transcriptRef.current = finalizedText ? deduplicateSpeech(finalizedText) : cleaned;
+      setTranscript(cleaned);
     };
 
     recognition.onerror = (event: any) => {
       setIsRecording(false);
       if (event.error !== 'aborted') {
-        setAnalysisError('Pengenalan suara gagal. Silakan coba lagi.');
+        setAnalysisError('Pengenalan suara gagal. Silakan periksa izin mikrofon Anda lalu coba lagi.');
       }
     };
 
     recognition.onend = () => {
       setIsRecording(false);
+      // Saat rekaman selesai, pastikan transkrip akhir dibersihkan dari duplikasi
+      if (transcriptRef.current) {
+        setTranscript(deduplicateSpeech(transcriptRef.current));
+      }
     };
 
-    recognition.start();
+    try {
+      recognition.start();
+    } catch (e: any) {
+      setIsRecording(false);
+      setAnalysisError('Gagal memulai mikrofon: ' + (e?.message || 'Error tidak diketahui'));
+    }
   };
 
   const stopRecording = () => {
@@ -120,10 +162,14 @@ export default function SpeakingExercise() {
       // ignore
     }
     setIsRecording(false);
+    if (transcriptRef.current) {
+      setTranscript(deduplicateSpeech(transcriptRef.current));
+    }
   };
 
   const handleAnalyze = async () => {
-    const text = transcriptRef.current.trim() || transcript.trim();
+    const rawText = transcriptRef.current.trim() || transcript.trim();
+    const text = deduplicateSpeech(rawText);
     if (!text || !user || isAnalyzing || isRecording) return;
     setIsAnalyzing(true);
     setFeedback(null);
