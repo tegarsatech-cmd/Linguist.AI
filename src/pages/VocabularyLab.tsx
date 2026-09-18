@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Search,
@@ -13,10 +13,22 @@ import {
   ArrowRight,
   ArrowLeft,
   Filter,
+  Shuffle,
+  ChevronDown,
 } from 'lucide-react';
 import { VOCABULARY_LIST, type VocabularyItem } from '../data/vocabularyData';
 
 type ViewMode = 'list' | 'flashcard' | 'quiz';
+
+/** Helper untuk mengacak urutan array (Fisher-Yates) */
+function shuffleArray<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
 export default function VocabularyLab() {
   const [viewMode, setViewMode] = useState<ViewMode>('list');
@@ -24,16 +36,25 @@ export default function VocabularyLab() {
   const [selectedLevel, setSelectedLevel] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
+  // Progressive rendering: load 30 cards initially agar perpindahan menu instan (< 15ms)
+  const [displayedCount, setDisplayedCount] = useState<number>(30);
+  const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null);
+
   // Flashcard states
   const [flashcardIndex, setFlashcardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [masteredIds, setMasteredIds] = useState<Set<number>>(new Set());
 
-  // Quiz states
+  // Quiz states (Soal diacak secara otomatis, bukan monoton dari nomor 1)
   const [quizIndex, setQuizIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [isAnswerSubmitted, setIsAnswerSubmitted] = useState(false);
   const [quizScore, setQuizScore] = useState(0);
+
+  // Inisialisasi antrean soal kuis teracak dari 1.000 kata
+  const [quizOrder, setQuizOrder] = useState<number[]>(() => {
+    return shuffleArray(Array.from({ length: VOCABULARY_LIST.length }, (_, i) => i));
+  });
 
   // Audio Pronunciation using Web Speech API
   const playAudio = (word: string) => {
@@ -46,14 +67,20 @@ export default function VocabularyLab() {
     }
   };
 
+  // Reset displayed count saat filter atau pencarian berubah
+  useEffect(() => {
+    setDisplayedCount(30);
+  }, [searchQuery, selectedLevel, selectedCategory]);
+
   // Filtered list
   const filteredWords = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return VOCABULARY_LIST.filter((item) => {
       const matchQuery =
-        searchQuery.trim() === '' ||
-        item.word.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.translation.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.example.toLowerCase().includes(searchQuery.toLowerCase());
+        q === '' ||
+        item.word.toLowerCase().includes(q) ||
+        item.translation.toLowerCase().includes(q) ||
+        item.example.toLowerCase().includes(q);
 
       const matchLevel = selectedLevel === 'all' || item.level === selectedLevel;
       const matchCategory = selectedCategory === 'all' || item.category === selectedCategory;
@@ -62,25 +89,70 @@ export default function VocabularyLab() {
     });
   }, [searchQuery, selectedLevel, selectedCategory]);
 
+  // Daftar kata yang dirender secara bertahap untuk kecepatan maksimal
+  const visibleWords = useMemo(() => {
+    return filteredWords.slice(0, displayedCount);
+  }, [filteredWords, displayedCount]);
+
+  // Infinite scroll observer: otomatis muat lebih banyak saat pengguna scroll ke bawah
+  useEffect(() => {
+    if (!loadMoreTriggerRef.current || viewMode !== 'list') return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setDisplayedCount((prev) => Math.min(filteredWords.length, prev + 30));
+        }
+      },
+      { rootMargin: '250px' }
+    );
+
+    observer.observe(loadMoreTriggerRef.current);
+    return () => observer.disconnect();
+  }, [viewMode, filteredWords.length, displayedCount]);
+
   const currentFlashcard = filteredWords[flashcardIndex] || filteredWords[0] || VOCABULARY_LIST[0];
 
-  // Quiz question generation
+  // Acak ulang urutan kuis
+  const handleShuffleQuiz = () => {
+    setQuizOrder(shuffleArray(Array.from({ length: VOCABULARY_LIST.length }, (_, i) => i)));
+    setQuizIndex(0);
+    setSelectedOption(null);
+    setIsAnswerSubmitted(false);
+    setQuizScore(0);
+  };
+
+  // Generate soal kuis & pilihan jawaban Bahasa Indonesia acak (tanpa embel-embel level B1 dsb)
   const currentQuizItem = useMemo(() => {
-    const pool = filteredWords.length >= 4 ? filteredWords : VOCABULARY_LIST;
-    const safeIndex = quizIndex % pool.length;
-    const correct = pool[safeIndex];
+    // Ambil soal berdasarkan antrean yang sudah diacak
+    const pool = VOCABULARY_LIST;
+    const targetIndex = quizOrder[quizIndex % quizOrder.length] ?? (quizIndex % pool.length);
+    const correct = pool[targetIndex] || pool[0];
 
-    // Generate 3 random wrong answers
-    const wrongOptions = pool
-      .filter((w) => w.id !== correct.id)
-      .sort(() => 0.5 - Math.random())
-      .slice(0, 3)
-      .map((w) => w.translation);
+    // Ambil 3 pilihan terjemahan Bahasa Indonesia yang salah secara acak dari 1.000 kata
+    const wrongCandidates = pool.filter(
+      (w) => w.id !== correct.id && w.translation.trim().toLowerCase() !== correct.translation.trim().toLowerCase()
+    );
+    const shuffledWrong = shuffleArray(wrongCandidates);
 
-    const allOptions = [correct.translation, ...wrongOptions].sort(() => 0.5 - Math.random());
+    const wrongTranslations: string[] = [];
+    const seen = new Set<string>([correct.translation.trim().toLowerCase()]);
+
+    for (const item of shuffledWrong) {
+      const trans = item.translation.trim();
+      const norm = trans.toLowerCase();
+      if (!seen.has(norm)) {
+        seen.add(norm);
+        wrongTranslations.push(trans);
+        if (wrongTranslations.length === 3) break;
+      }
+    }
+
+    // Gabungkan 1 jawaban benar (Bahasa Indonesia) + 3 jawaban salah (Bahasa Indonesia) lalu diacak posisinya
+    const allOptions = shuffleArray([correct.translation, ...wrongTranslations]);
 
     return { correct, options: allOptions };
-  }, [quizIndex, filteredWords]);
+  }, [quizIndex, quizOrder]);
 
   const handleNextFlashcard = () => {
     setIsFlipped(false);
@@ -90,6 +162,12 @@ export default function VocabularyLab() {
   const handlePrevFlashcard = () => {
     setIsFlipped(false);
     setFlashcardIndex((prev) => (prev - 1 + (filteredWords.length || 1)) % (filteredWords.length || 1));
+  };
+
+  const handleShuffleFlashcards = () => {
+    setIsFlipped(false);
+    const rand = Math.floor(Math.random() * (filteredWords.length || 1));
+    setFlashcardIndex(rand);
   };
 
   const toggleMastered = (id: number) => {
@@ -115,6 +193,7 @@ export default function VocabularyLab() {
     setIsAnswerSubmitted(false);
     setQuizIndex((prev) => prev + 1);
   };
+
 
   return (
     <div className="p-4 sm:p-6 md:p-10 pb-32 max-w-6xl mx-auto space-y-6 min-h-full">
@@ -227,62 +306,81 @@ export default function VocabularyLab() {
               <p className="text-sm text-text-muted">Tidak ditemukan kata yang sesuai kriteria pencarian.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredWords.map((item) => (
-                <div
-                  key={item.id}
-                  className="bg-bg-panel/90 border border-border-main rounded-xl p-4 sm:p-5 hover:border-brand-blue/40 transition-all flex flex-col justify-between group shadow-sm hover:shadow-md"
-                >
-                  <div>
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-lg font-semibold text-white group-hover:text-brand-blue transition-colors">
-                            {item.word}
-                          </h3>
-                          <button
-                            onClick={() => playAudio(item.word)}
-                            title="Dengarkan pelafalan"
-                            aria-label={`Dengarkan pelafalan ${item.word}`}
-                            className="p-1 hover:bg-white/10 rounded-full text-text-muted hover:text-brand-blue transition-colors"
-                          >
-                            <Volume2 className="w-4 h-4" />
-                          </button>
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {visibleWords.map((item) => (
+                  <div
+                    key={item.id}
+                    className="bg-bg-panel/90 border border-border-main rounded-xl p-4 sm:p-5 hover:border-brand-blue/40 transition-all flex flex-col justify-between group shadow-sm hover:shadow-md"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-lg font-semibold text-white group-hover:text-brand-blue transition-colors">
+                              {item.word}
+                            </h3>
+                            <button
+                              onClick={() => playAudio(item.word)}
+                              title="Dengarkan pelafalan"
+                              aria-label={`Dengarkan pelafalan ${item.word}`}
+                              className="p-1 hover:bg-white/10 rounded-full text-text-muted hover:text-brand-blue transition-colors"
+                            >
+                              <Volume2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <p className="text-xs text-text-muted font-mono">{item.phonetic}</p>
                         </div>
-                        <p className="text-xs text-text-muted font-mono">{item.phonetic}</p>
+
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-brand-blue/15 text-brand-blue border border-brand-blue/20">
+                            {item.level}
+                          </span>
+                          <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-white/5 text-text-dim border border-border-main">
+                            {item.partOfSpeech}
+                          </span>
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-brand-blue/15 text-brand-blue border border-brand-blue/20">
-                          {item.level}
-                        </span>
-                        <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-white/5 text-text-dim border border-border-main">
-                          {item.partOfSpeech}
-                        </span>
+                      <div className="mt-3 pt-3 border-t border-border-main/50">
+                        <p className="text-sm font-medium text-emerald-400 mb-1.5">{item.translation}</p>
+                        <p className="text-xs text-text-dim italic leading-relaxed">"{item.example}"</p>
+                        <p className="text-[11px] text-text-muted mt-1 leading-relaxed">{item.exampleTranslation}</p>
                       </div>
                     </div>
 
-                    <div className="mt-3 pt-3 border-t border-border-main/50">
-                      <p className="text-sm font-medium text-emerald-400 mb-1.5">{item.translation}</p>
-                      <p className="text-xs text-text-dim italic leading-relaxed">"{item.example}"</p>
-                      <p className="text-[11px] text-text-muted mt-1 leading-relaxed">{item.exampleTranslation}</p>
+                    <div className="mt-4 pt-2 flex items-center justify-between text-[10px] text-text-muted border-t border-border-main/30">
+                      <span className="bg-white/[0.03] px-2 py-0.5 rounded text-text-dim">{item.category}</span>
+                      <button
+                        onClick={() => toggleMastered(item.id)}
+                        className={`flex items-center gap-1 transition-colors ${
+                          masteredIds.has(item.id) ? 'text-emerald-400 font-semibold' : 'hover:text-white'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        {masteredIds.has(item.id) ? 'Hafal' : 'Tandai Hafal'}
+                      </button>
                     </div>
                   </div>
+                ))}
+              </div>
 
-                  <div className="mt-4 pt-2 flex items-center justify-between text-[10px] text-text-muted border-t border-border-main/30">
-                    <span className="bg-white/[0.03] px-2 py-0.5 rounded text-text-dim">{item.category}</span>
-                    <button
-                      onClick={() => toggleMastered(item.id)}
-                      className={`flex items-center gap-1 transition-colors ${
-                        masteredIds.has(item.id) ? 'text-emerald-400 font-semibold' : 'hover:text-white'
-                      }`}
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      {masteredIds.has(item.id) ? 'Hafal' : 'Tandai Hafal'}
-                    </button>
-                  </div>
+              {/* Tombol Muat Lebih Banyak & Infinite Scroll Trigger */}
+              {visibleWords.length < filteredWords.length && (
+                <div className="pt-4 pb-2 text-center space-y-2.5">
+                  <button
+                    onClick={() => setDisplayedCount((prev) => Math.min(filteredWords.length, prev + 30))}
+                    className="px-6 py-2.5 rounded-xl bg-bg-panel border border-border-main hover:border-brand-blue/50 text-xs font-semibold text-white inline-flex items-center gap-2 transition-all hover:bg-white/5 active:scale-95 shadow-sm"
+                  >
+                    <ChevronDown className="w-4 h-4" />
+                    Tampilkan Lebih Banyak ({visibleWords.length} dari {filteredWords.length} kata)
+                  </button>
+                  <p className="text-[11px] text-text-muted">
+                    Atau gulir ke bawah untuk memuat otomatis
+                  </p>
+                  <div ref={loadMoreTriggerRef} className="h-6 w-full pointer-events-none" />
                 </div>
-              ))}
+              )}
             </div>
           )}
         </div>
@@ -355,27 +453,34 @@ export default function VocabularyLab() {
           </div>
 
           {/* Flashcard Controls */}
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center justify-between gap-3">
             <button
               onClick={handlePrevFlashcard}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-bg-panel border border-border-main hover:bg-white/5 text-xs font-medium text-white flex items-center justify-center gap-2 transition-colors"
+              className="flex-1 py-2.5 px-3 rounded-xl bg-bg-panel border border-border-main hover:bg-white/5 text-xs font-medium text-white flex items-center justify-center gap-1.5 transition-colors"
             >
               <ArrowLeft className="w-4 h-4" /> Sebelumnya
             </button>
             <button
+              onClick={handleShuffleFlashcards}
+              title="Acak urutan flashcard"
+              className="py-2.5 px-3 rounded-xl bg-bg-panel border border-border-main hover:bg-white/5 text-xs font-medium text-text-muted hover:text-white flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <Shuffle className="w-3.5 h-3.5" /> Acak
+            </button>
+            <button
               onClick={() => toggleMastered(currentFlashcard.id)}
-              className={`px-4 py-2.5 rounded-xl text-xs font-medium border transition-colors flex items-center gap-1.5 ${
+              className={`px-3 py-2.5 rounded-xl text-xs font-medium border transition-colors flex items-center gap-1.5 ${
                 masteredIds.has(currentFlashcard.id)
                   ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
                   : 'bg-bg-panel border-border-main text-text-muted hover:text-white'
               }`}
             >
               <CheckCircle2 className="w-4 h-4" />
-              {masteredIds.has(currentFlashcard.id) ? 'Hafal' : 'Tandai Hafal'}
+              {masteredIds.has(currentFlashcard.id) ? 'Hafal' : 'Tandai'}
             </button>
             <button
               onClick={handleNextFlashcard}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-brand-blue hover:bg-brand-blue/90 text-xs font-medium text-white flex items-center justify-center gap-2 transition-colors shadow-lg shadow-brand-blue/20"
+              className="flex-1 py-2.5 px-3 rounded-xl bg-brand-blue hover:bg-brand-blue/90 text-xs font-medium text-white flex items-center justify-center gap-1.5 transition-colors shadow-lg shadow-brand-blue/20"
             >
               Selanjutnya <ArrowRight className="w-4 h-4" />
             </button>
@@ -387,8 +492,22 @@ export default function VocabularyLab() {
       {viewMode === 'quiz' && (
         <div className="max-w-lg mx-auto space-y-6 pt-4">
           <div className="flex items-center justify-between text-xs text-text-muted">
-            <span>Soal #{quizIndex + 1}</span>
-            <span className="text-brand-blue font-medium">Skor Anda: {quizScore}</span>
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-white/90">Soal #{quizIndex + 1}</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand-blue/15 text-brand-blue border border-brand-blue/20">
+                Soal Teracak
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleShuffleQuiz}
+                className="inline-flex items-center gap-1 text-[11px] text-text-muted hover:text-brand-blue transition-colors px-2 py-1 rounded bg-white/5 hover:bg-white/10"
+                title="Acak ulang susunan soal kuis"
+              >
+                <Shuffle className="w-3 h-3" /> Acak Soal Baru
+              </button>
+              <span className="text-brand-blue font-semibold">Skor: {quizScore}</span>
+            </div>
           </div>
 
           <div className="bg-bg-panel border border-border-main rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
@@ -412,6 +531,7 @@ export default function VocabularyLab() {
             {/* Options */}
             <div className="space-y-3">
               {currentQuizItem.options.map((option, idx) => {
+                const optionLabel = ['A', 'B', 'C', 'D'][idx] || `${idx + 1}`;
                 const isSelected = selectedOption === option;
                 const isCorrect = option === currentQuizItem.correct.translation;
 
@@ -431,9 +551,14 @@ export default function VocabularyLab() {
                     key={idx}
                     disabled={isAnswerSubmitted}
                     onClick={() => handleQuizSubmit(option)}
-                    className={`w-full p-4 rounded-xl border text-left text-xs sm:text-sm transition-all flex items-center justify-between ${btnClass}`}
+                    className={`w-full p-3.5 sm:p-4 rounded-xl border text-left text-xs sm:text-sm transition-all flex items-center justify-between gap-3 ${btnClass}`}
                   >
-                    <span>{option}</span>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="w-6 h-6 rounded-lg bg-white/10 flex items-center justify-center text-xs font-bold shrink-0 font-mono text-white/90">
+                        {optionLabel}
+                      </span>
+                      <span className="font-medium text-white/95 leading-snug">{option}</span>
+                    </div>
                     {isAnswerSubmitted && isCorrect && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
                     {isAnswerSubmitted && isSelected && !isCorrect && (
                       <XCircle className="w-4 h-4 text-red-400 shrink-0" />
@@ -466,3 +591,4 @@ export default function VocabularyLab() {
     </div>
   );
 }
+
