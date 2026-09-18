@@ -80,7 +80,7 @@ export default function Layout({ children }: LayoutProps) {
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Tes Kalimat Inggris', path: '/exercise/writing', icon: PenTool },
     { name: 'Tes Berbicara Inggris', path: '/exercise/speaking', icon: Mic2 },
-    { name: 'Lab Kosakata (1.000 Kata)', path: '/vocabulary', icon: BookOpen },
+    { name: 'Lab Kosakata (10.000 Kata)', path: '/vocabulary', icon: BookOpen },
     { name: 'Rubrik Penilaian', path: '/rubric', icon: FlaskConical },
   ];
 

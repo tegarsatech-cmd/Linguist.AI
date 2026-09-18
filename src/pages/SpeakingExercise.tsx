@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Mic,
@@ -292,7 +292,9 @@ export default function SpeakingExercise() {
     try {
       const text = await transcribeAudio(blob);
       if (!text || !text.trim()) {
-        setAnalysisError('Tidak ada kata bahasa Inggris yang terdeteksi. Silakan coba rekam ulang dengan suara lebih jelas.');
+        transcriptRef.current = '';
+        setTranscript('');
+        setAnalysisError('Tidak ada suara atau percakapan yang terdeteksi. Silakan rekam kembali sambil berbicara dalam bahasa Inggris.');
       } else {
         transcriptRef.current = text.trim();
         setTranscript(text.trim());

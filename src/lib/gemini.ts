@@ -366,6 +366,50 @@ export async function evaluateSpeaking(transcription: string): Promise<SpeakingF
   return validateSpeaking(parseJson<SpeakingFeedback>(raw), transcription);
 }
 
+// Comprehensive suppression of OpenAI Whisper/Gemini silence or background hiss hallucinations
+const isSilenceHallucination = (raw: string): boolean => {
+  const norm = raw.toLowerCase().replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!norm) return true;
+  if (norm.length <= 2) return true;
+
+  const exactHallucinations = new Set([
+    'thank you',
+    'thank you very much',
+    'thank you so much',
+    'thank you for watching',
+    'thanks for watching',
+    'thanks',
+    'thank you bye',
+    'thank you goodbye',
+    'bye',
+    'bye bye',
+    'goodbye',
+    'watching',
+    'subtitles by',
+    'subtitles by the amaraorg community',
+    'silence',
+    'music',
+    'applause',
+    'so',
+    'you',
+    'like and subscribe',
+    'please subscribe',
+    'dont forget to subscribe',
+  ]);
+
+  if (exactHallucinations.has(norm)) return true;
+
+  const words = norm.split(' ');
+  const isAllThankOrSubs = words.every(w => ['thank', 'you', 'thanks', 'very', 'much', 'so', 'for', 'watching', 'bye', 'goodbye', 'subscribe'].includes(w));
+  if (isAllThankOrSubs && words.length <= 12) return true;
+
+  if (norm.includes('subtitles by') || norm.includes('amara org') || norm.includes('thanks for watching')) {
+    return true;
+  }
+
+  return false;
+};
+
 /**
  * Transkripsi audio rekaman suara pengguna seperti VN WhatsApp menggunakan Groq Whisper
  * (sangat akurat, mengenali aksen & tanpa looping dering), dengan fallback ke Gemini 2.5 Flash.
@@ -393,7 +437,13 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
 
       if (res.ok) {
         const data = await res.json();
-        const text = (data.text || '').trim();
+        let text = (data.text || '').trim();
+
+        if (isSilenceHallucination(text)) {
+          console.log('Detected and suppressed Whisper silence hallucination:', text);
+          text = '';
+        }
+
         if (text) {
           return text;
         }
@@ -443,7 +493,10 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
         ],
       });
 
-      const text = extractText(response).trim();
+      let text = extractText(response).trim();
+      if (isSilenceHallucination(text)) {
+        text = '';
+      }
       if (text) {
         return text;
       }

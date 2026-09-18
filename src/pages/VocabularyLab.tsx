@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useDeferredValue } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Search,
@@ -15,10 +15,15 @@ import {
   Filter,
   Shuffle,
   ChevronDown,
+  Bookmark,
+  BookmarkCheck,
+  RotateCcw,
+  Flame,
+  Eye,
+  Award,
+  ChevronRight,
 } from 'lucide-react';
 import { VOCABULARY_LIST, type VocabularyItem } from '../data/vocabularyData';
-
-type ViewMode = 'list' | 'flashcard' | 'quiz';
 
 /** Helper untuk mengacak urutan array (Fisher-Yates) */
 function shuffleArray<T>(array: T[]): T[] {
@@ -31,8 +36,9 @@ function shuffleArray<T>(array: T[]): T[] {
 }
 
 export default function VocabularyLab() {
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'flashcard' | 'quiz'>('list');
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredQuery = useDeferredValue(searchQuery);
   const [selectedLevel, setSelectedLevel] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
@@ -70,11 +76,11 @@ export default function VocabularyLab() {
   // Reset displayed count saat filter atau pencarian berubah
   useEffect(() => {
     setDisplayedCount(30);
-  }, [searchQuery, selectedLevel, selectedCategory]);
+  }, [deferredQuery, selectedLevel, selectedCategory]);
 
-  // Filtered list
+  // Filtered list menggunakan deferredQuery agar ketikan instan tanpa lag
   const filteredWords = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     return VOCABULARY_LIST.filter((item) => {
       const matchQuery =
         q === '' ||
@@ -87,7 +93,7 @@ export default function VocabularyLab() {
 
       return matchQuery && matchLevel && matchCategory;
     });
-  }, [searchQuery, selectedLevel, selectedCategory]);
+  }, [deferredQuery, selectedLevel, selectedCategory]);
 
   // Daftar kata yang dirender secara bertahap untuk kecepatan maksimal
   const visibleWords = useMemo(() => {
@@ -204,7 +210,7 @@ export default function VocabularyLab() {
             <span>{VOCABULARY_LIST.length} Kosakata Bahasa Inggris Aktif (A1–C1)</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-serif italic text-white tracking-tight">
-            Lab Kosakata & Leksikal (1.000 Kata)
+            Lab Kosakata & Leksikal (10.000 Kata)
           </h1>
           <p className="text-xs sm:text-sm text-text-muted mt-1">
             Kuasai kosakata akademik, bisnis, dan sehari-hari dari tingkat dasar (A1) hingga mahir (C1) dilengkapi audio dan mode kuis.
