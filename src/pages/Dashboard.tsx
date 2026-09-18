@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { fetchSubmissions, deleteSubmission, getLocalSubmissions, type SubmissionRow } from '../lib/submissions';
 import YouTubeRecommendations from '../components/YouTubeRecommendations';
+import { FORMATTED_VOCABULARY_COUNT } from '../data/vocabularyMeta';
 
 /**
  * Dashboard: Riwayat Latihan + Statistik Progress + Detail Modal Interaktif
@@ -185,10 +186,10 @@ export default function Dashboard() {
             <Sparkles className="w-5 h-5" />
           </div>
           <h3 className="text-sm font-semibold text-white/95 group-hover:text-emerald-400 transition-colors">
-            Lab Kosakata (10.000 Kata)
+            Lab Kosakata ({FORMATTED_VOCABULARY_COUNT} Kata)
           </h3>
           <p className="mt-1 text-xs text-text-muted leading-relaxed">
-            Koleksi 10.000 kosakata bahasa Inggris level A1–C1 dilengkapi audio, flashcard & kuis.
+            Koleksi {FORMATTED_VOCABULARY_COUNT} kosakata bahasa Inggris level A1–C1 dilengkapi audio, flashcard & kuis.
           </p>
         </button>
       </div>

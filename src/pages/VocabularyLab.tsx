@@ -208,10 +208,10 @@ export default function VocabularyLab() {
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-blue/10 border border-brand-blue/20 text-brand-blue text-[11px] font-mono mb-2">
             <Sparkles className="w-3 h-3" />
-            <span>{VOCABULARY_LIST.length} Kosakata Bahasa Inggris Aktif (A1–C1)</span>
+            <span>{VOCABULARY_LIST.length.toLocaleString('id-ID')} Kosakata Bahasa Inggris Aktif (A1–C1)</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-serif italic text-white tracking-tight">
-            Lab Kosakata & Leksikal (10.000 Kata)
+            Lab Kosakata & Leksikal ({VOCABULARY_LIST.length.toLocaleString('id-ID')} Kata)
           </h1>
           <p className="text-xs sm:text-sm text-text-muted mt-1">
             Kuasai kosakata akademik, bisnis, dan sehari-hari dari tingkat dasar (A1) hingga mahir (C1) dilengkapi audio dan mode kuis.

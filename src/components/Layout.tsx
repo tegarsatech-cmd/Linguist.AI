@@ -23,6 +23,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { FORMATTED_VOCABULARY_COUNT } from '../data/vocabularyMeta';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -48,9 +49,9 @@ export default function Layout({ children }: LayoutProps) {
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [showNewPass, setShowNewPass] = useState(false);
   const [showConfirmPass, setShowConfirmPass] = useState(false);
-  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
   const [passwordError, setPasswordError] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState('');
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
 
   // Close mobile drawer on route change
   useEffect(() => {
@@ -80,7 +81,7 @@ export default function Layout({ children }: LayoutProps) {
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Tes Kalimat Inggris', path: '/exercise/writing', icon: PenTool },
     { name: 'Tes Berbicara Inggris', path: '/exercise/speaking', icon: Mic2 },
-    { name: 'Lab Kosakata (10.000 Kata)', path: '/vocabulary', icon: BookOpen },
+    { name: `Lab Kosakata (${FORMATTED_VOCABULARY_COUNT} Kata)`, path: '/vocabulary', icon: BookOpen },
     { name: 'Rubrik Penilaian', path: '/rubric', icon: FlaskConical },
   ];
 
