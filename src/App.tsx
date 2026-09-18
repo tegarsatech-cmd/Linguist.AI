@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Analytics } from "@vercel/analytics/react";
 import Atmosphere from "./components/Atmosphere";
@@ -7,8 +8,9 @@ import Dashboard from "./pages/Dashboard";
 import WritingExercise from "./pages/WritingExercise";
 import SpeakingExercise from "./pages/SpeakingExercise";
 import Rubric from "./pages/Rubric";
-import VocabularyLab from "./pages/VocabularyLab";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+
+const VocabularyLab = lazy(() => import("./pages/VocabularyLab"));
 
 function AppRoutes() {
   const { user, loading } = useAuth();
@@ -36,7 +38,20 @@ function AppRoutes() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/exercise/writing" element={<WritingExercise />} />
         <Route path="/exercise/speaking" element={<SpeakingExercise />} />
-        <Route path="/vocabulary" element={<VocabularyLab />} />
+        <Route
+          path="/vocabulary"
+          element={
+            <Suspense
+              fallback={
+                <div className="flex items-center justify-center min-h-[50vh]">
+                  <div className="w-8 h-8 border-2 border-brand-blue/20 border-t-brand-blue rounded-full animate-spin" />
+                </div>
+              }
+            >
+              <VocabularyLab />
+            </Suspense>
+          }
+        />
         <Route path="/rubric" element={<Rubric />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>

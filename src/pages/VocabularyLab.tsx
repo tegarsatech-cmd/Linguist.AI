@@ -129,22 +129,21 @@ export default function VocabularyLab() {
     const targetIndex = quizOrder[quizIndex % quizOrder.length] ?? (quizIndex % pool.length);
     const correct = pool[targetIndex] || pool[0];
 
-    // Ambil 3 pilihan terjemahan Bahasa Indonesia yang salah secara acak dari 1.000 kata
-    const wrongCandidates = pool.filter(
-      (w) => w.id !== correct.id && w.translation.trim().toLowerCase() !== correct.translation.trim().toLowerCase()
-    );
-    const shuffledWrong = shuffleArray(wrongCandidates);
-
+    // Ambil 3 pilihan terjemahan Bahasa Indonesia yang salah secara acak dan instan
     const wrongTranslations: string[] = [];
     const seen = new Set<string>([correct.translation.trim().toLowerCase()]);
+    let attempts = 0;
 
-    for (const item of shuffledWrong) {
-      const trans = item.translation.trim();
+    while (wrongTranslations.length < 3 && attempts < 60) {
+      attempts++;
+      const randIdx = Math.floor(Math.random() * pool.length);
+      const candidate = pool[randIdx];
+      if (!candidate) continue;
+      const trans = candidate.translation.trim();
       const norm = trans.toLowerCase();
-      if (!seen.has(norm)) {
+      if (!seen.has(norm) && candidate.id !== correct.id) {
         seen.add(norm);
         wrongTranslations.push(trans);
-        if (wrongTranslations.length === 3) break;
       }
     }
 
