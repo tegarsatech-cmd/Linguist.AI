@@ -12,6 +12,7 @@ const __dirname = path.dirname(__filename);
 
 const DATA_DIR = path.join(__dirname, 'data');
 const SUBMISSIONS_FILE = path.join(DATA_DIR, 'submissions.json');
+const SECURITY_BANS_FILE = path.join(DATA_DIR, 'security_bans.json');
 
 function ensureDataStore(): void {
   try {
@@ -20,6 +21,9 @@ function ensureDataStore(): void {
     }
     if (!fs.existsSync(SUBMISSIONS_FILE)) {
       fs.writeFileSync(SUBMISSIONS_FILE, JSON.stringify([], null, 2), 'utf-8');
+    }
+    if (!fs.existsSync(SECURITY_BANS_FILE)) {
+      fs.writeFileSync(SECURITY_BANS_FILE, JSON.stringify({ bans: {}, strikes: {} }, null, 2), 'utf-8');
     }
   } catch (e) {
     console.error('Data store init error:', e);
@@ -44,6 +48,50 @@ function writeSubmissions(rows: any[]): void {
   } catch (e) {
     console.error('Error writing submissions:', e);
   }
+}
+
+interface SecurityBanRecord {
+  banType: 'temporary_1day' | 'permanent';
+  bannedAt: string;
+  expiresAt: string | null;
+  reason: string;
+  strikeCount: number;
+  ip: string;
+  deviceFingerprint?: string;
+  userId?: string;
+}
+
+interface SecurityData {
+  bans: Record<string, SecurityBanRecord>;
+  strikes: Record<string, { count: number; lastViolationAt: string }>;
+}
+
+function readSecurityData(): SecurityData {
+  ensureDataStore();
+  try {
+    const raw = fs.readFileSync(SECURITY_BANS_FILE, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return { bans: {}, strikes: {} };
+  }
+}
+
+function writeSecurityData(data: SecurityData): void {
+  ensureDataStore();
+  try {
+    fs.writeFileSync(SECURITY_BANS_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Error writing security data:', e);
+  }
+}
+
+function getRequestIp(req: express.Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  const rawIp = req.socket.remoteAddress || '127.0.0.1';
+  return rawIp.replace(/^::ffff:/, '');
 }
 
 function numOr(v: unknown, fallback: number): number {
@@ -200,6 +248,184 @@ async function startServer() {
     } catch (e: any) {
       console.error('Error deleting submission:', e?.message);
       res.status(500).json({ error: 'Gagal menghapus dari database.' });
+    }
+  });
+
+  // --- Security & Moderation Endpoints ---
+  app.get('/api/security/client-info', (req, res) => {
+    const ip = getRequestIp(req);
+    res.json({ ip });
+  });
+
+  app.post('/api/security/status', (req, res) => {
+    try {
+      const ip = getRequestIp(req);
+      const { deviceFingerprint, userId } = req.body || {};
+      const data = readSecurityData();
+      const now = Date.now();
+
+      const keysToCheck = [
+        `ip_${ip}`,
+        deviceFingerprint ? `dev_${deviceFingerprint}` : null,
+        userId && userId !== 'guest' ? `user_${userId}` : null,
+      ].filter(Boolean) as string[];
+
+      let activeBan: SecurityBanRecord | null = null;
+
+      for (const k of keysToCheck) {
+        if (data.bans[k]) {
+          const rec = data.bans[k];
+          // Cek masa berlaku untuk ban 1 hari
+          if (rec.banType === 'temporary_1day' && rec.expiresAt) {
+            const exp = new Date(rec.expiresAt).getTime();
+            if (now > exp) {
+              // Sudah melewati 24 jam -> hapus ban otomatis
+              delete data.bans[k];
+              if (data.strikes[k]) {
+                delete data.strikes[k];
+              }
+              writeSecurityData(data);
+              continue;
+            }
+          }
+          activeBan = rec;
+          break;
+        }
+      }
+
+      if (activeBan) {
+        return res.json({
+          isBanned: true,
+          banType: activeBan.banType,
+          bannedAt: activeBan.bannedAt,
+          expiresAt: activeBan.expiresAt,
+          reason: activeBan.reason,
+          strikeCount: activeBan.strikeCount || 3,
+          ip,
+        });
+      }
+
+      // Hitung akumulasi strike
+      let strikeCount = 0;
+      for (const k of keysToCheck) {
+        if (data.strikes[k] && data.strikes[k].count > strikeCount) {
+          strikeCount = data.strikes[k].count;
+        }
+      }
+
+      return res.json({
+        isBanned: false,
+        strikeCount,
+        ip,
+      });
+    } catch (e: any) {
+      console.error('Security status check error:', e?.message);
+      res.status(500).json({ error: 'Gagal memeriksa status keamanan.' });
+    }
+  });
+
+  app.post('/api/security/report', (req, res) => {
+    try {
+      const ip = getRequestIp(req);
+      const { type, excerpt, deviceFingerprint, userId } = req.body || {};
+      const data = readSecurityData();
+      const nowIso = new Date().toISOString();
+
+      const ipKey = `ip_${ip}`;
+      const devKey = deviceFingerprint ? `dev_${deviceFingerprint}` : null;
+      const userKey = userId && userId !== 'guest' ? `user_${userId}` : null;
+      const allKeys = [ipKey, devKey, userKey].filter(Boolean) as string[];
+
+      if (type === 'malicious_script') {
+        // BANNED SELAMANYA untuk IP & Device & Akun
+        const banRec: SecurityBanRecord = {
+          banType: 'permanent',
+          bannedAt: nowIso,
+          expiresAt: null,
+          reason: 'Percobaan injeksi skrip atau kode berbahaya (Malicious Script / Exploit Injection) yang membahayakan website.',
+          strikeCount: 99,
+          ip,
+          deviceFingerprint,
+          userId,
+        };
+
+        for (const k of allKeys) {
+          data.bans[k] = banRec;
+        }
+        writeSecurityData(data);
+
+        console.warn(`[SECURITY PERMANENT BAN] IP: ${ip}, Device: ${deviceFingerprint}, Reason: Malicious Script (${excerpt})`);
+        return res.json({
+          success: true,
+          banned: true,
+          banType: 'permanent',
+          reason: banRec.reason,
+          ip,
+        });
+      }
+
+      if (type === 'toxic') {
+        let maxCount = 0;
+        for (const k of allKeys) {
+          if (data.strikes[k] && data.strikes[k].count > maxCount) {
+            maxCount = data.strikes[k].count;
+          }
+        }
+        const newCount = maxCount + 1;
+
+        for (const k of allKeys) {
+          data.strikes[k] = {
+            count: newCount,
+            lastViolationAt: nowIso,
+          };
+        }
+
+        if (newCount >= 3) {
+          // BANNED 1 HARI (24 Jam)
+          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+          const banRec: SecurityBanRecord = {
+            banType: 'temporary_1day',
+            bannedAt: nowIso,
+            expiresAt,
+            reason: 'Melanggar aturan bahasa sebanyak 3 kali berturut-turut (penggunaan kata kasar/toxic/vulgar).',
+            strikeCount: newCount,
+            ip,
+            deviceFingerprint,
+            userId,
+          };
+
+          for (const k of allKeys) {
+            data.bans[k] = banRec;
+          }
+          writeSecurityData(data);
+
+          console.warn(`[SECURITY 1-DAY BAN] IP: ${ip}, Device: ${deviceFingerprint}, Strikes: ${newCount}`);
+          return res.json({
+            success: true,
+            banned: true,
+            banType: 'temporary_1day',
+            expiresAt,
+            reason: banRec.reason,
+            strikeCount: newCount,
+            ip,
+          });
+        }
+
+        writeSecurityData(data);
+        console.log(`[SECURITY STRIKE] IP: ${ip}, Device: ${deviceFingerprint}, Strike: ${newCount}/3`);
+        return res.json({
+          success: true,
+          banned: false,
+          strikeCount: newCount,
+          maxStrikes: 3,
+          ip,
+        });
+      }
+
+      return res.status(400).json({ error: 'Tipe pelanggaran tidak dikenali.' });
+    } catch (e: any) {
+      console.error('Security report error:', e?.message);
+      res.status(500).json({ error: 'Gagal memproses laporan keamanan.' });
     }
   });
 

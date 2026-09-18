@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   RefreshCw,
@@ -14,6 +14,16 @@ import { useAuth } from '../contexts/AuthContext';
 import { evaluateWriting, RUBRIC, type WritingFeedback } from '../lib/gemini';
 import { saveWritingSubmission, deleteSubmission, type SubmissionRow } from '../lib/submissions';
 import YouTubeRecommendations from '../components/YouTubeRecommendations';
+import { checkInputSecurity } from '../lib/securityGuard';
+import {
+  getLocalBanState,
+  syncSecurityStatus,
+  recordSecurityViolation,
+  type BanState,
+  type WarningNotice,
+} from '../lib/securityStore';
+import SecurityWarningModal from '../components/SecurityWarningModal';
+import BanScreenOverlay from '../components/BanScreenOverlay';
 
 /**
  * Writing: input teks → Gemini (rubrik 30/20/20/15/15, temperature 0)
@@ -30,6 +40,14 @@ export default function WritingExercise() {
   const [feedback, setFeedback] = useState<WritingFeedback | null>(null);
   const [analysisError, setAnalysisError] = useState('');
 
+  // Security & Ban State
+  const [banState, setBanState] = useState<BanState>(() => getLocalBanState());
+  const [warningNotice, setWarningNotice] = useState<WarningNotice | null>(null);
+
+  useEffect(() => {
+    syncSecurityStatus(user?.id).then(setBanState);
+  }, [user?.id]);
+
   // Saving states
   const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
@@ -38,6 +56,34 @@ export default function WritingExercise() {
 
   const handleAnalyze = async () => {
     if (!text.trim() || !user || isAnalyzing) return;
+
+    // 1. Cek jika perangkat / IP sedang diblokir
+    const currentBan = getLocalBanState();
+    if (currentBan.isBanned) {
+      setBanState(currentBan);
+      return;
+    }
+
+    // 2. Pemeriksaan Keamanan Konten: Toxic / Vulgar & Script Berbahaya
+    const secResult = checkInputSecurity(text);
+    if (!secResult.safe && secResult.violationType) {
+      const isGuest = Boolean(user?.user_metadata?.is_guest);
+      const notice = await recordSecurityViolation({
+        type: secResult.violationType,
+        excerpt: secResult.matchedContent || text.slice(0, 50),
+        isGuest,
+        userId: user?.id,
+      });
+
+      if (notice.isBannedNow) {
+        const updatedBan = getLocalBanState();
+        setBanState(updatedBan);
+      } else {
+        setWarningNotice(notice);
+      }
+      return;
+    }
+
     setIsAnalyzing(true);
     setFeedback(null);
     setAnalysisError('');
@@ -324,6 +370,20 @@ export default function WritingExercise() {
             Hasil analisis akan muncul di sini setelah kamu mengklik tombol "Analisis Naskah".
           </p>
         </div>
+      )}
+
+      {/* Surat Peringatan Pelanggaran Kata Toxic / Script */}
+      <SecurityWarningModal
+        notice={warningNotice}
+        onClose={() => setWarningNotice(null)}
+      />
+
+      {/* Layar Blokir Banned 1 Hari / Banned Selamanya */}
+      {banState.isBanned && (
+        <BanScreenOverlay
+          banState={banState}
+          onStatusUpdate={setBanState}
+        />
       )}
     </div>
   );

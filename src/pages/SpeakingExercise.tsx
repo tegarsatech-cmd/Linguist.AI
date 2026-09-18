@@ -21,6 +21,16 @@ import { useAuth } from '../contexts/AuthContext';
 import { evaluateSpeaking, transcribeAudio, type SpeakingFeedback } from '../lib/gemini';
 import { saveSpeakingSubmission, deleteSubmission, type SubmissionRow } from '../lib/submissions';
 import YouTubeRecommendations from '../components/YouTubeRecommendations';
+import { checkInputSecurity } from '../lib/securityGuard';
+import {
+  getLocalBanState,
+  syncSecurityStatus,
+  recordSecurityViolation,
+  type BanState,
+  type WarningNotice,
+} from '../lib/securityStore';
+import SecurityWarningModal from '../components/SecurityWarningModal';
+import BanScreenOverlay from '../components/BanScreenOverlay';
 
 /**
  * Format detik menjadi mm:ss
@@ -34,6 +44,14 @@ function formatDuration(sec: number): string {
 export default function SpeakingExercise() {
   const navigate = useNavigate();
   const { user } = useAuth();
+
+  // Security & Ban State
+  const [banState, setBanState] = useState<BanState>(() => getLocalBanState());
+  const [warningNotice, setWarningNotice] = useState<WarningNotice | null>(null);
+
+  useEffect(() => {
+    syncSecurityStatus(user?.id).then(setBanState);
+  }, [user?.id]);
 
   // Recording & VN Audio States
   const [isRecording, setIsRecording] = useState(false);
@@ -133,6 +151,13 @@ export default function SpeakingExercise() {
     setSavedRow(null);
     setSaveMessage('');
     setRecordingDuration(0);
+
+    // Cek apakah perangkat sedang dibanned sebelum memulai rekaman
+    const currentBan = getLocalBanState();
+    if (currentBan.isBanned) {
+      setBanState(currentBan);
+      return;
+    }
 
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -296,6 +321,27 @@ export default function SpeakingExercise() {
         setTranscript('');
         setAnalysisError('Tidak ada suara atau percakapan yang terdeteksi. Silakan rekam kembali sambil berbicara dalam bahasa Inggris.');
       } else {
+        // Pemeriksaan Keamanan Audio yang Ditranskripsi
+        const secResult = checkInputSecurity(text);
+        if (!secResult.safe && secResult.violationType) {
+          transcriptRef.current = '';
+          setTranscript('');
+          const isGuest = Boolean(user?.user_metadata?.is_guest);
+          const notice = await recordSecurityViolation({
+            type: secResult.violationType,
+            excerpt: secResult.matchedContent || text.slice(0, 50),
+            isGuest,
+            userId: user?.id,
+          });
+
+          if (notice.isBannedNow) {
+            setBanState(getLocalBanState());
+          } else {
+            setWarningNotice(notice);
+          }
+          return;
+        }
+
         transcriptRef.current = text.trim();
         setTranscript(text.trim());
       }
@@ -385,6 +431,33 @@ export default function SpeakingExercise() {
   const handleAnalyze = async () => {
     const rawText = transcriptRef.current.trim() || transcript.trim();
     if (!rawText || !user || isAnalyzing || isRecording || isTranscribing) return;
+
+    // 1. Cek jika perangkat / IP sedang diblokir
+    const currentBan = getLocalBanState();
+    if (currentBan.isBanned) {
+      setBanState(currentBan);
+      return;
+    }
+
+    // 2. Pemeriksaan Keamanan Konten: Toxic / Vulgar & Script Berbahaya
+    const secResult = checkInputSecurity(rawText);
+    if (!secResult.safe && secResult.violationType) {
+      const isGuest = Boolean(user?.user_metadata?.is_guest);
+      const notice = await recordSecurityViolation({
+        type: secResult.violationType,
+        excerpt: secResult.matchedContent || rawText.slice(0, 50),
+        isGuest,
+        userId: user?.id,
+      });
+
+      if (notice.isBannedNow) {
+        setBanState(getLocalBanState());
+      } else {
+        setWarningNotice(notice);
+      }
+      return;
+    }
+
     setIsAnalyzing(true);
     setFeedback(null);
     setAnalysisError('');
@@ -790,6 +863,20 @@ export default function SpeakingExercise() {
             Tekan mikrofon untuk berbicara, lalu klik "Analisis Transkrip" untuk mengevaluasi kemampuan berbicaramu.
           </p>
         </div>
+      )}
+
+      {/* Surat Peringatan Pelanggaran Kata Toxic / Script */}
+      <SecurityWarningModal
+        notice={warningNotice}
+        onClose={() => setWarningNotice(null)}
+      />
+
+      {/* Layar Blokir Banned 1 Hari / Banned Selamanya */}
+      {banState.isBanned && (
+        <BanScreenOverlay
+          banState={banState}
+          onStatusUpdate={setBanState}
+        />
       )}
     </div>
   );
