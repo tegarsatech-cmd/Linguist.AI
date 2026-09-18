@@ -365,3 +365,93 @@ export async function evaluateSpeaking(transcription: string): Promise<SpeakingF
   );
   return validateSpeaking(parseJson<SpeakingFeedback>(raw), transcription);
 }
+
+/**
+ * Transkripsi audio rekaman suara pengguna seperti VN WhatsApp menggunakan Groq Whisper
+ * (sangat akurat, mengenali aksen & tanpa looping dering), dengan fallback ke Gemini 2.5 Flash.
+ */
+export async function transcribeAudio(audioBlob: Blob): Promise<string> {
+  // 1. Coba Groq Whisper-large-v3-turbo (Standar industri akurasi ASR tertinggi ~300ms)
+  try {
+    const groqKey = getGroqApiKey();
+    if (groqKey) {
+      const mime = audioBlob.type || 'audio/webm';
+      const ext = mime.includes('mp4') ? 'mp4' : mime.includes('ogg') ? 'ogg' : mime.includes('wav') ? 'wav' : 'webm';
+      const formData = new FormData();
+      formData.append('file', audioBlob, `speech_recording.${ext}`);
+      formData.append('model', 'whisper-large-v3-turbo');
+      formData.append('language', 'en');
+      formData.append('response_format', 'json');
+
+      const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${groqKey}`,
+        },
+        body: formData,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const text = (data.text || '').trim();
+        if (text) {
+          return text;
+        }
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.warn('Groq whisper transcription response not ok:', res.status, errText);
+      }
+    }
+  } catch (err: any) {
+    console.warn('Groq Whisper error, beralih ke Gemini:', err?.message);
+  }
+
+  // 2. Fallback: Google Gemini 2.5 Flash (multimodal audio)
+  try {
+    const geminiKey = getGeminiApiKey();
+    if (geminiKey) {
+      const base64Data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const res = (reader.result as string) || '';
+          const base64 = res.includes(',') ? res.split(',')[1] : res;
+          resolve(base64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(audioBlob);
+      });
+
+      const ai = new GoogleGenAI({ apiKey: geminiKey });
+      const mime = audioBlob.type || 'audio/webm';
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  mimeType: mime,
+                  data: base64Data,
+                },
+              },
+              {
+                text: 'Transcribe the spoken English speech in this audio accurately. Return ONLY the plain transcribed English text, without markdown, quotes, or conversational explanations.',
+              },
+            ],
+          },
+        ],
+      });
+
+      const text = extractText(response).trim();
+      if (text) {
+        return text;
+      }
+    }
+  } catch (err: any) {
+    console.warn('Gemini audio transcription error:', err?.message);
+  }
+
+  throw new Error('Tidak dapat mentranskripsi suara audio. Pastikan suara terdengar jelas atau periksa koneksi internet Anda.');
+}
+

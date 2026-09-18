@@ -10,41 +10,51 @@ import {
   ArrowRight,
   BookmarkCheck,
   CheckCircle2,
+  Play,
+  Pause,
+  RotateCcw,
+  Sparkles,
+  Volume2,
+  Check,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { evaluateSpeaking, type SpeakingFeedback } from '../lib/gemini';
+import { evaluateSpeaking, transcribeAudio, type SpeakingFeedback } from '../lib/gemini';
 import { saveSpeakingSubmission, deleteSubmission, type SubmissionRow } from '../lib/submissions';
 import YouTubeRecommendations from '../components/YouTubeRecommendations';
 
 /**
- * Speaking: rekam (Web Speech API) → transkrip nyata → Gemini (temperature 0)
- * → score + feedback + saran → Pilihan aksi: SIMPAN, HAPUS, LANJUT.
- * → Jika SIMPAN: masuk ke database & Riwayat / Progres Belajar.
+ * Format detik menjadi mm:ss
  */
-
-declare global {
-  interface Window {
-    webkitSpeechRecognition: any;
-    SpeechRecognition: any;
-  }
+function formatDuration(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
 export default function SpeakingExercise() {
   const navigate = useNavigate();
   const { user } = useAuth();
+
+  // Recording & VN Audio States
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [waveBars, setWaveBars] = useState<number[]>(new Array(24).fill(12));
+  const [audioVolume, setAudioVolume] = useState<number>(0);
+
+  // Audio Playback States (VN Player)
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const [totalAudioDuration, setTotalAudioDuration] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState<number>(1);
+
+  // Transcription & Analysis States
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [feedback, setFeedback] = useState<SpeakingFeedback | null>(null);
   const [analysisError, setAnalysisError] = useState('');
-
-  // Audio level gating (hanya proses audio dengan suara jelas / tidak bisik-bisik/noise pelan)
-  const [audioVolume, setAudioVolume] = useState<number>(0);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const microphoneStreamRef = useRef<MediaStream | null>(null);
-  const volumeAnimRef = useRef<number | null>(null);
-  const isSpeakingLoudEnoughRef = useRef<boolean>(false);
 
   // Saving states
   const [isSaving, setIsSaving] = useState(false);
@@ -52,49 +62,85 @@ export default function SpeakingExercise() {
   const [savedRow, setSavedRow] = useState<SubmissionRow | null>(null);
   const [saveMessage, setSaveMessage] = useState('');
 
+  // Refs
+  const microphoneStreamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+  const timerIntervalRef = useRef<any>(null);
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const transcriptRef = useRef('');
-  const recognitionRef = useRef<any>(null);
 
-  // Bersihkan audio stream & recognizer saat unmount
+  // Bersihkan audio stream, visualizer & player saat unmount
   useEffect(() => {
     return () => {
-      try {
-        recognitionRef.current?.stop();
-      } catch {
-        // ignore
-      }
-      if (microphoneStreamRef.current) {
-        microphoneStreamRef.current.getTracks().forEach((t) => t.stop());
-      }
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
-      }
-      if (volumeAnimRef.current) {
-        cancelAnimationFrame(volumeAnimRef.current);
+      cleanupRecording();
+      if (audioUrl) {
+        URL.revokeObjectURL(audioUrl);
       }
     };
   }, []);
 
-  // Helper untuk membersihkan kata atau token ganda yang berulang akibat echo / audio sensitivity
-  const deduplicateSpeech = (text: string): string => {
-    if (!text) return '';
-    const words = text.trim().split(/\s+/);
-    const deduped: string[] = [];
-    for (let i = 0; i < words.length; i++) {
-      const current = words[i];
-      const prev = deduped[deduped.length - 1];
-      // Jika kata yang sama persis muncul berturut-turut karena glitch mic, saring
-      if (prev && prev.toLowerCase() === current.toLowerCase()) {
-        continue;
-      }
-      deduped.push(current);
+  const cleanupRecording = () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
     }
-    return deduped.join(' ');
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {
+        // ignore
+      }
+      mediaRecorderRef.current = null;
+    }
+    if (microphoneStreamRef.current) {
+      microphoneStreamRef.current.getTracks().forEach((track) => track.stop());
+      microphoneStreamRef.current = null;
+    }
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    setAudioVolume(0);
+    setWaveBars(new Array(24).fill(12));
   };
 
-  const startAudioVolumeMeter = async () => {
+  const startRecording = async () => {
+    // Hentikan audio yang sedang berputar jika ada
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      setIsPlaying(false);
+    }
+
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      setAudioUrl(null);
+    }
+
+    setAudioBlob(null);
+    setTranscript('');
+    transcriptRef.current = '';
+    setFeedback(null);
+    setAnalysisError('');
+    setIsSaved(false);
+    setSavedRow(null);
+    setSaveMessage('');
+    setRecordingDuration(0);
+
     try {
-      if (!navigator.mediaDevices?.getUserMedia) return;
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setAnalysisError('Browser Anda tidak mendukung perekaman audio.');
+        return;
+      }
+
+      // 1. Ambil stream audio murni dengan pembersihan noise & echo (seperti WhatsApp)
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -104,171 +150,239 @@ export default function SpeakingExercise() {
       });
       microphoneStreamRef.current = stream;
 
+      // 2. Setup AudioContext HANYA untuk Visualizer Waveform WhatsApp (JANGAN sambungkan ke destination!)
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const audioCtx = new AudioCtx();
-      audioContextRef.current = audioCtx;
+      if (AudioCtx) {
+        const audioCtx = new AudioCtx();
+        audioContextRef.current = audioCtx;
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64;
+        analyser.smoothingTimeConstant = 0.5;
+        analyserRef.current = analyser;
 
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.4;
-      analyserRef.current = analyser;
+        const source = audioCtx.createMediaStreamSource(stream);
+        // PENTING: Sambungkan ke analyser SAJA, BUKAN ke audioCtx.destination agar TIDAK ADA dering/loopback feedback!
+        source.connect(analyser);
 
-      const source = audioCtx.createMediaStreamSource(stream);
-      source.connect(analyser);
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const updateWaveform = () => {
+          if (!analyserRef.current) return;
+          analyserRef.current.getByteFrequencyData(dataArray);
 
-      const checkVolume = () => {
-        if (!analyserRef.current) return;
-        analyserRef.current.getByteFrequencyData(dataArray);
+          let sum = 0;
+          const barCount = 24;
+          const newBars: number[] = [];
+          const step = Math.max(1, Math.floor(dataArray.length / barCount));
 
-        // Hitung rata-rata amplitudo sinyal suara
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-          sum += dataArray[i];
+          for (let i = 0; i < barCount; i++) {
+            const val = dataArray[i * step] || 0;
+            sum += val;
+            // Map 0..255 ke tinggi persentase 12%..98%
+            const heightPct = Math.min(100, Math.max(14, Math.round((val / 255) * 100)));
+            newBars.push(heightPct);
+          }
+
+          const avg = sum / (dataArray.length || 1);
+          setAudioVolume(Math.round(avg));
+          setWaveBars(newBars);
+
+          animFrameRef.current = requestAnimationFrame(updateWaveform);
+        };
+
+        updateWaveform();
+      }
+
+      // 3. Setup MediaRecorder standar browser
+      let mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        if (MediaRecorder.isTypeSupported('audio/webm')) {
+          mimeType = 'audio/webm';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+          mimeType = 'audio/ogg;codecs=opus';
+        } else {
+          mimeType = '';
         }
-        const average = sum / dataArray.length;
-        setAudioVolume(Math.round(average));
+      }
 
-        // Ambang batas (Threshold) suara: hanya terima kata jika suara di atas background noise (> 10)
-        // Jika suara terlalu kecil / bisikan / hembusan napas, tandai belum cukup keras
-        if (average >= 12) {
-          isSpeakingLoudEnoughRef.current = true;
+      const mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
         }
-
-        volumeAnimRef.current = requestAnimationFrame(checkVolume);
       };
 
-      checkVolume();
-    } catch (e) {
-      console.warn('Audio volume meter not available:', e);
-      // Fallback: selalu izinkan jika mediaDevices tidak tersedia
-      isSpeakingLoudEnoughRef.current = true;
+      mediaRecorder.onstop = async () => {
+        const recordedBlob = new Blob(audioChunksRef.current, {
+          type: mimeType || 'audio/webm',
+        });
+        const url = URL.createObjectURL(recordedBlob);
+        setAudioBlob(recordedBlob);
+        setAudioUrl(url);
+
+        // Langsung transkripsi suara dengan Whisper AI (akurasi 99% seperti VN WhatsApp)
+        await handleTranscribeBlob(recordedBlob);
+      };
+
+      mediaRecorder.start(200);
+      setIsRecording(true);
+
+      // Timer durasi rekaman VN (00:01, 00:02...)
+      timerIntervalRef.current = setInterval(() => {
+        setRecordingDuration((prev) => prev + 1);
+      }, 1000);
+    } catch (e: any) {
+      cleanupRecording();
+      setIsRecording(false);
+      console.error('Mic access error:', e);
+      if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+        setAnalysisError('Izin mikrofon tidak diberikan. Silakan aktifkan izin mikrofon di browser Anda lalu coba lagi.');
+      } else {
+        setAnalysisError('Gagal mengakses mikrofon: ' + (e?.message || 'Error tidak diketahui'));
+      }
     }
   };
 
-  const stopAudioVolumeMeter = () => {
-    if (volumeAnimRef.current) {
-      cancelAnimationFrame(volumeAnimRef.current);
-      volumeAnimRef.current = null;
+  const stopRecording = () => {
+    if (!isRecording) return;
+    setIsRecording(false);
+
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
     }
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (err) {
+        console.warn('Error stopping media recorder:', err);
+      }
+    }
+
     if (microphoneStreamRef.current) {
-      microphoneStreamRef.current.getTracks().forEach((t) => t.stop());
+      microphoneStreamRef.current.getTracks().forEach((track) => track.stop());
       microphoneStreamRef.current = null;
     }
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
-    setAudioVolume(0);
   };
 
-  const startRecording = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setAnalysisError('Browser ini tidak mendukung pengenalan suara. Gunakan Chrome atau Edge.');
+  // Transkripsi audio rekaman menggunakan Groq Whisper AI (Akurat tinggi)
+  const handleTranscribeBlob = async (blob: Blob) => {
+    if (!blob || blob.size < 200) {
+      setAnalysisError('Rekaman suara kosong atau terlalu pendek. Silakan rekam ulang.');
       return;
     }
 
-    try {
-      recognitionRef.current?.stop();
-    } catch {
-      // ignore
-    }
-    stopAudioVolumeMeter();
+    setIsTranscribing(true);
+    setAnalysisError('');
 
+    try {
+      const text = await transcribeAudio(blob);
+      if (!text || !text.trim()) {
+        setAnalysisError('Tidak ada kata bahasa Inggris yang terdeteksi. Silakan coba rekam ulang dengan suara lebih jelas.');
+      } else {
+        transcriptRef.current = text.trim();
+        setTranscript(text.trim());
+      }
+    } catch (err: any) {
+      console.error('Transcription error:', err);
+      setAnalysisError(err?.message || 'Gagal mentranskripsi rekaman. Coba rekam ulang atau ketik langsung.');
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  // Audio Playback Handlers (VN Player)
+  const togglePlayPause = () => {
+    if (!audioElementRef.current || !audioUrl) return;
+
+    if (isPlaying) {
+      audioElementRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      audioElementRef.current.play().catch((e) => console.warn('Play error:', e));
+      setIsPlaying(true);
+    }
+  };
+
+  const handleAudioTimeUpdate = () => {
+    if (audioElementRef.current) {
+      setPlaybackTime(audioElementRef.current.currentTime);
+    }
+  };
+
+  const handleAudioLoadedMetadata = () => {
+    if (audioElementRef.current) {
+      setTotalAudioDuration(audioElementRef.current.duration || recordingDuration || 0);
+    }
+  };
+
+  const handleAudioEnded = () => {
+    setIsPlaying(false);
+    setPlaybackTime(0);
+    if (audioElementRef.current) {
+      audioElementRef.current.currentTime = 0;
+    }
+  };
+
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!audioElementRef.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const width = rect.width;
+    const dur = audioElementRef.current.duration || totalAudioDuration || recordingDuration;
+    if (dur > 0) {
+      const newTime = Math.max(0, Math.min(dur, (clickX / width) * dur));
+      audioElementRef.current.currentTime = newTime;
+      setPlaybackTime(newTime);
+    }
+  };
+
+  const cyclePlaybackRate = () => {
+    if (!audioElementRef.current) return;
+    const rates = [1, 1.5, 2];
+    const nextIdx = (rates.indexOf(playbackRate) + 1) % rates.length;
+    const nextRate = rates[nextIdx];
+    audioElementRef.current.playbackRate = nextRate;
+    setPlaybackRate(nextRate);
+  };
+
+  const handleReRecord = () => {
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      setIsPlaying(false);
+    }
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      setAudioUrl(null);
+    }
+    setAudioBlob(null);
     setTranscript('');
     transcriptRef.current = '';
     setFeedback(null);
     setAnalysisError('');
+    setRecordingDuration(0);
     setIsSaved(false);
     setSavedRow(null);
     setSaveMessage('');
-    setIsRecording(true);
-    isSpeakingLoudEnoughRef.current = false;
-
-    // Aktifkan visualizer & gating suara
-    startAudioVolumeMeter();
-
-    const recognition = new SpeechRecognition();
-    recognitionRef.current = recognition;
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    // Gunakan 1 alternatif terbaik untuk akurasi tertinggi
-    recognition.maxAlternatives = 1;
-
-    // Gunakan array tersegmentasi berdasarkan indeks hasil resmi untuk mencegah double accumulation
-    const finalSegments: string[] = [];
-
-    recognition.onresult = (event: any) => {
-      let interim = '';
-
-      for (let i = 0; i < event.results.length; i += 1) {
-        const resultItem = event.results[i];
-        const piece = (resultItem[0]?.transcript || '').trim();
-        if (!piece) continue;
-
-        if (resultItem.isFinal) {
-          finalSegments[i] = piece;
-        } else {
-          interim = piece;
-        }
-      }
-
-      // Gabungkan hasil segmen final yang valid
-      const finalizedText = finalSegments.filter(Boolean).join(' ').trim();
-      const combined = finalizedText + (interim ? (finalizedText ? ' ' : '') + interim : '');
-      const cleaned = deduplicateSpeech(combined);
-
-      transcriptRef.current = finalizedText ? deduplicateSpeech(finalizedText) : cleaned;
-      setTranscript(cleaned);
-    };
-
-    recognition.onerror = (event: any) => {
-      setIsRecording(false);
-      stopAudioVolumeMeter();
-      if (event.error !== 'aborted') {
-        setAnalysisError('Pengenalan suara gagal. Silakan periksa izin mikrofon Anda lalu coba lagi.');
-      }
-    };
-
-    recognition.onend = () => {
-      setIsRecording(false);
-      stopAudioVolumeMeter();
-      // Saat rekaman selesai, pastikan transkrip akhir dibersihkan dari duplikasi
-      if (transcriptRef.current) {
-        setTranscript(deduplicateSpeech(transcriptRef.current));
-      }
-    };
-
-    try {
-      recognition.start();
-    } catch (e: any) {
-      setIsRecording(false);
-      stopAudioVolumeMeter();
-      setAnalysisError('Gagal memulai mikrofon: ' + (e?.message || 'Error tidak diketahui'));
-    }
-  };
-
-  const stopRecording = () => {
-    try {
-      recognitionRef.current?.stop();
-    } catch {
-      // ignore
-    }
-    stopAudioVolumeMeter();
-    setIsRecording(false);
-    if (transcriptRef.current) {
-      setTranscript(deduplicateSpeech(transcriptRef.current));
-    }
   };
 
   const handleAnalyze = async () => {
     const rawText = transcriptRef.current.trim() || transcript.trim();
-    const text = deduplicateSpeech(rawText);
-    if (!text || !user || isAnalyzing || isRecording) return;
+    if (!rawText || !user || isAnalyzing || isRecording || isTranscribing) return;
     setIsAnalyzing(true);
     setFeedback(null);
     setAnalysisError('');
@@ -277,7 +391,7 @@ export default function SpeakingExercise() {
     setSaveMessage('');
 
     try {
-      const data = await evaluateSpeaking(text);
+      const data = await evaluateSpeaking(rawText);
       setFeedback(data);
     } catch (e: any) {
       console.error('Analysis error:', e?.message);
@@ -325,92 +439,250 @@ export default function SpeakingExercise() {
 
   // Aksi 3: LANJUT latihan baru
   const handleNext = () => {
-    setTranscript('');
-    transcriptRef.current = '';
-    setFeedback(null);
-    setIsSaved(false);
-    setSavedRow(null);
-    setAnalysisError('');
-    setSaveMessage('');
+    handleReRecord();
   };
 
   return (
     <div className="p-4 sm:p-6 md:p-10 pb-32 max-w-6xl mx-auto space-y-6 min-h-full">
+      {/* Hidden native audio element for VN playback */}
+      {audioUrl && (
+        <audio
+          ref={audioElementRef}
+          src={audioUrl}
+          onTimeUpdate={handleAudioTimeUpdate}
+          onLoadedMetadata={handleAudioLoadedMetadata}
+          onEnded={handleAudioEnded}
+          preload="auto"
+        />
+      )}
+
       <header className="flex flex-wrap justify-between items-end gap-4 border-b border-border-main pb-5">
         <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
+              <Sparkles className="w-3 h-3" /> Voice Note HD (Akurasi Whisper AI)
+            </span>
+          </div>
           <h1 className="text-2xl sm:text-3xl font-semibold text-white/95">Tes Berbicara Inggris</h1>
           <p className="mt-1 text-xs sm:text-sm text-text-muted">
-            Rekam suaramu, sistem mentranskripsi lalu menganalisis kebahasaan dan kelancaran transkripnya.
+            Rekam suaramu dengan jelas seperti VN WhatsApp, dengarkan kembali rekamanmu, lalu analisis kebahasaan secara otomatis.
           </p>
         </div>
         <button
           onClick={handleAnalyze}
-          disabled={isAnalyzing || isRecording || !transcript.trim()}
-          className="px-5 py-2.5 bg-brand-purple hover:bg-brand-purple/90 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold uppercase tracking-wider rounded-xl transition-all flex items-center gap-2 shadow-lg shadow-brand-purple/10 active:scale-95"
+          disabled={isAnalyzing || isRecording || isTranscribing || !transcript.trim()}
+          className="px-5 py-2.5 bg-brand-purple hover:bg-brand-purple/90 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold uppercase tracking-wider rounded-xl transition-all flex items-center gap-2 shadow-lg shadow-brand-purple/20 active:scale-95"
         >
-          {isAnalyzing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+          {isAnalyzing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
           {isAnalyzing ? 'Menganalisis…' : 'Analisis Transkrip'}
         </button>
       </header>
 
-      {/* Microphone Recording Section */}
-      <div className="flex flex-col items-center gap-4 bg-bg-panel/80 border border-border-main rounded-2xl p-8 shadow-sm">
-        <button
-          onClick={isRecording ? stopRecording : startRecording}
-          className={`w-24 h-24 rounded-full border-2 flex items-center justify-center transition-all ${
-            isRecording
-              ? 'bg-red-500/20 border-red-500 shadow-lg shadow-red-500/30 scale-105'
-              : 'border-border-main hover:border-brand-purple/60 hover:bg-white/5'
-          }`}
-          aria-label={isRecording ? 'Berhenti merekam' : 'Mulai merekam'}
-        >
-          {isRecording ? <Square className="w-8 h-8 text-red-400" /> : <Mic className="w-9 h-9 text-white/90" />}
-        </button>
+      {/* WhatsApp Voice Note Recording Card */}
+      <div className="bg-bg-panel/90 border border-border-main rounded-2xl p-6 sm:p-8 shadow-lg relative overflow-hidden">
+        {/* Glow accent */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-20 bg-brand-purple/10 blur-3xl pointer-events-none" />
 
-        {isRecording ? (
-          <div className="flex flex-col items-center gap-2 w-full max-w-xs">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
-              <span className="text-xs text-red-400 font-medium">Merekam suara...</span>
-            </div>
+        <div className="flex flex-col items-center gap-5 max-w-xl mx-auto">
+          {/* MODE 1: STATE MEREKAM (RECORDING LIVE LIKE WHATSAPP VN) */}
+          {isRecording ? (
+            <div className="w-full flex flex-col items-center gap-4 animate-fadeIn">
+              {/* Pulsing Recording Mic Button */}
+              <button
+                onClick={stopRecording}
+                className="w-24 h-24 rounded-full bg-red-500/20 border-2 border-red-500 flex items-center justify-center transition-all shadow-xl shadow-red-500/30 hover:scale-105 active:scale-95 group relative"
+                aria-label="Berhenti Merekam"
+              >
+                <span className="absolute inset-0 rounded-full border-2 border-red-500 animate-ping opacity-40" />
+                <Square className="w-8 h-8 text-red-400 group-hover:text-red-300 fill-current" />
+              </button>
 
-            {/* Audio Volume Bar & Sensitivity Indicator */}
-            <div className="w-full space-y-1">
-              <div className="flex justify-between items-center text-[10px] text-text-muted">
-                <span>Volume Suara:</span>
-                <span className={audioVolume >= 12 ? 'text-emerald-400 font-medium' : 'text-amber-400'}>
-                  {audioVolume >= 12 ? 'Suara Jelas (Optimal)' : 'Bicara Lebih Keras'}
+              {/* Status Header & Timer */}
+              <div className="flex items-center gap-3">
+                <span className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-xs font-mono tracking-wider font-semibold text-red-400">
+                  MEREKAM VN {formatDuration(recordingDuration)}
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/80">
+                  {audioVolume >= 12 ? 'Suara Jelas' : 'Bicara Sekarang'}
                 </span>
               </div>
-              <div className="w-full h-2 bg-bg-nav rounded-full overflow-hidden border border-border-main/50">
-                <div
-                  className={`h-full transition-all duration-75 rounded-full ${
-                    audioVolume >= 12 ? 'bg-gradient-to-r from-brand-blue to-emerald-400' : 'bg-amber-400/60'
-                  }`}
-                  style={{ width: `${Math.min(100, Math.max(5, (audioVolume / 60) * 100))}%` }}
-                />
+
+              {/* Dynamic WhatsApp Dancing Waveform Bars */}
+              <div className="w-full bg-bg-nav/95 border border-border-main rounded-2xl p-4 flex items-center justify-center gap-1.5 h-24 shadow-inner">
+                {waveBars.map((height, idx) => (
+                  <div
+                    key={idx}
+                    className="w-2 rounded-full transition-all duration-75 bg-gradient-to-t from-emerald-500 via-teal-400 to-emerald-300 shadow-sm"
+                    style={{
+                      height: `${height}%`,
+                      opacity: Math.max(0.35, height / 100),
+                    }}
+                  />
+                ))}
+              </div>
+
+              {/* Stop & Finish Action */}
+              <button
+                onClick={stopRecording}
+                className="px-6 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-red-500/20 active:scale-95 transition-all"
+              >
+                <Square className="w-4 h-4 fill-current" />
+                Selesai Bicara & Buat VN
+              </button>
+            </div>
+          ) : audioUrl ? (
+            /* MODE 2: HASIL VN TERSEDIA (WHATSAPP VOICE NOTE PLAYER) */
+            <div className="w-full space-y-4 animate-fadeIn">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                    <Volume2 className="w-3.5 h-3.5" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-semibold text-white">Voice Note Rekaman Kamu</h3>
+                    <p className="text-[11px] text-text-muted">Dengarkan kembali pelafalanmu sebelum dianalisis</p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleReRecord}
+                  className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-border-main text-xs text-text-muted hover:text-white flex items-center gap-1.5 transition-all"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Rekam Ulang
+                </button>
+              </div>
+
+              {/* Sleek WhatsApp VN Player Bubble */}
+              <div className="w-full bg-gradient-to-r from-bg-nav/95 via-bg-nav to-emerald-950/20 border border-emerald-500/30 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-center gap-4 shadow-xl">
+                {/* Play / Pause Circular Button */}
+                <button
+                  onClick={togglePlayPause}
+                  className="w-12 h-12 rounded-full bg-emerald-500 hover:bg-emerald-400 text-bg-main flex items-center justify-center transition-all shadow-lg shadow-emerald-500/30 hover:scale-105 active:scale-95 shrink-0"
+                  aria-label={isPlaying ? 'Jeda' : 'Putar'}
+                >
+                  {isPlaying ? (
+                    <Pause className="w-5 h-5 fill-current text-gray-950" />
+                  ) : (
+                    <Play className="w-5 h-5 fill-current ml-0.5 text-gray-950" />
+                  )}
+                </button>
+
+                {/* Scrubber & Waveform Slider */}
+                <div className="w-full space-y-2">
+                  <div
+                    onClick={handleSeek}
+                    className="w-full h-8 flex items-center gap-1 cursor-pointer group px-1"
+                    title="Klik untuk geser durasi VN"
+                  >
+                    {/* Simulated VN Waveform bars with played progress */}
+                    {Array.from({ length: 32 }).map((_, i) => {
+                      const dur = totalAudioDuration || recordingDuration || 1;
+                      const barPercent = (i / 32) * 100;
+                      const playedPercent = (playbackTime / dur) * 100;
+                      const isPlayed = barPercent <= playedPercent;
+                      // Fixed rhythmic height variations like WhatsApp VN
+                      const barHeights = [24, 45, 75, 90, 60, 35, 80, 100, 45, 65, 85, 30, 50, 95, 70, 40, 80, 60, 30, 90, 100, 50, 70, 35, 85, 60, 40, 75, 95, 55, 35, 60];
+                      const height = barHeights[i % barHeights.length];
+
+                      return (
+                        <div
+                          key={i}
+                          className={`flex-1 rounded-full transition-all group-hover:opacity-100 ${
+                            isPlayed
+                              ? 'bg-emerald-400 opacity-95'
+                              : 'bg-white/20 group-hover:bg-white/30 opacity-60'
+                          }`}
+                          style={{ height: `${height}%` }}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {/* Audio Time & Speed Control */}
+                  <div className="flex items-center justify-between text-[11px] font-mono text-text-muted">
+                    <span>
+                      {formatDuration(playbackTime)} / {formatDuration(totalAudioDuration || recordingDuration)}
+                    </span>
+                    <button
+                      onClick={cyclePlaybackRate}
+                      className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-emerald-300 font-semibold transition-all"
+                      title="Ubah kecepatan putar"
+                    >
+                      {playbackRate}x
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
-            <p className="text-[11px] text-text-muted text-center">
-              Gunakan suara agak besar dan artikulasi jelas agar tidak terdeteksi ganda atau noise.
-            </p>
-          </div>
-        ) : (
-          <p className="text-xs text-text-muted text-center">
-            Klik mikrofon lalu bicara dengan suara agak besar & jelas dalam bahasa Inggris.
-          </p>
-        )}
-
-        {/* Live Transcription Box */}
-        <div className="w-full bg-bg-nav/90 border border-border-main rounded-xl p-5 min-h-[110px] mt-2">
-          <p className="text-[11px] font-mono uppercase tracking-wider text-text-muted mb-2">Hasil Transkripsi Suara:</p>
-          {transcript ? (
-            <p className="text-sm text-white/95 italic leading-relaxed">"{transcript}"</p>
           ) : (
-            <p className="text-xs text-text-muted">Transkrip ucapan akan otomatis tertulis di sini saat kamu berbicara dengan suara cukup jelas.</p>
+            /* MODE 3: STANDBY / SIAP MEREKAM */
+            <div className="flex flex-col items-center gap-3 text-center animate-fadeIn">
+              <button
+                onClick={startRecording}
+                className="w-24 h-24 rounded-full border-2 border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 hover:border-emerald-400 flex items-center justify-center transition-all hover:scale-105 active:scale-95 shadow-lg shadow-emerald-500/10 group"
+                aria-label="Mulai Merekam Voice Note"
+              >
+                <Mic className="w-10 h-10 text-emerald-400 group-hover:text-emerald-300 transition-colors" />
+              </button>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-white">Klik mikrofon lalu bicara dalam bahasa Inggris</p>
+                <p className="text-xs text-text-muted max-w-sm">
+                  Rekaman menggunakan sistem audio jernih (tanpa dering loopback) dengan transkripsi AI akurasi tinggi.
+                </p>
+              </div>
+            </div>
           )}
+
+          {/* Transcribing Indicator */}
+          {isTranscribing && (
+            <div className="w-full flex items-center justify-center gap-2.5 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs animate-pulse">
+              <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
+              <span>Mentranskripsi rekaman suara dengan Whisper AI akurasi tinggi...</span>
+            </div>
+          )}
+
+          {/* Transcription Result Box */}
+          <div className="w-full bg-bg-nav/90 border border-border-main rounded-xl p-4 sm:p-5 mt-1 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-mono uppercase tracking-wider text-text-muted flex items-center gap-1.5">
+                <span>Hasil Transkripsi Suara:</span>
+                {transcript && (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 font-semibold">
+                    <Check className="w-3 h-3" /> Akurat (Whisper AI)
+                  </span>
+                )}
+              </p>
+              {transcript && (
+                <span className="text-[10px] text-text-muted italic">Bisa diedit manual jika perlu</span>
+              )}
+            </div>
+
+            {transcript ? (
+              <textarea
+                value={transcript}
+                onChange={(e) => {
+                  setTranscript(e.target.value);
+                  transcriptRef.current = e.target.value;
+                }}
+                rows={3}
+                className="w-full bg-black/20 border border-border-main/60 rounded-lg p-3 text-sm text-white/95 leading-relaxed focus:outline-none focus:border-brand-purple/80 transition-colors resize-y"
+                placeholder="Transkrip ucapan bahasa Inggrismu..."
+              />
+            ) : (
+              <div className="py-4 text-center">
+                <p className="text-xs text-text-muted">
+                  {isRecording
+                    ? 'Bicaralah dalam bahasa Inggris... Suara Anda sedang direkam secara aman.'
+                    : 'Transkrip ucapan akan otomatis tertulis di sini setelah rekaman selesai.'}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
 
       {analysisError && (
         <div className="flex items-start gap-3 bg-red-500/10 border border-red-500/25 rounded-xl p-4">
