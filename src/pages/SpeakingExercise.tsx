@@ -458,33 +458,25 @@ export default function SpeakingExercise() {
 
       <header className="flex flex-wrap justify-between items-end gap-4 border-b border-border-main pb-5">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3" /> Voice Note HD (Akurasi Whisper AI)
-            </span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-semibold text-white/95">Tes Berbicara Inggris</h1>
           <p className="mt-1 text-xs sm:text-sm text-text-muted">
-            Rekam suaramu dengan jelas seperti VN WhatsApp, dengarkan kembali rekamanmu, lalu analisis kebahasaan secara otomatis.
+            Rekam suaramu, sistem mentranskripsi lalu menganalisis kebahasaan dan kelancaran transkripnya.
           </p>
         </div>
         <button
           onClick={handleAnalyze}
           disabled={isAnalyzing || isRecording || isTranscribing || !transcript.trim()}
-          className="px-5 py-2.5 bg-brand-purple hover:bg-brand-purple/90 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold uppercase tracking-wider rounded-xl transition-all flex items-center gap-2 shadow-lg shadow-brand-purple/20 active:scale-95"
+          className="px-5 py-2.5 bg-brand-purple hover:bg-brand-purple/90 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold uppercase tracking-wider rounded-xl transition-all flex items-center gap-2 shadow-lg shadow-brand-purple/10 active:scale-95"
         >
-          {isAnalyzing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+          {isAnalyzing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
           {isAnalyzing ? 'Menganalisis…' : 'Analisis Transkrip'}
         </button>
       </header>
 
-      {/* WhatsApp Voice Note Recording Card */}
-      <div className="bg-bg-panel/90 border border-border-main rounded-2xl p-6 sm:p-8 shadow-lg relative overflow-hidden">
-        {/* Glow accent */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-20 bg-brand-purple/10 blur-3xl pointer-events-none" />
-
+      {/* Microphone Recording Section */}
+      <div className="bg-bg-panel/90 border border-border-main rounded-2xl p-6 sm:p-8 shadow-sm relative overflow-hidden">
         <div className="flex flex-col items-center gap-5 max-w-xl mx-auto">
-          {/* MODE 1: STATE MEREKAM (RECORDING LIVE LIKE WHATSAPP VN) */}
+          {/* MODE 1: STATE MEREKAM */}
           {isRecording ? (
             <div className="w-full flex flex-col items-center gap-4 animate-fadeIn">
               {/* Pulsing Recording Mic Button */}
@@ -497,19 +489,12 @@ export default function SpeakingExercise() {
                 <Square className="w-8 h-8 text-red-400 group-hover:text-red-300 fill-current" />
               </button>
 
-              {/* Status Header & Timer */}
-              <div className="flex items-center gap-3">
-                <span className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
-                <span className="text-xs font-mono tracking-wider font-semibold text-red-400">
-                  MEREKAM VN {formatDuration(recordingDuration)}
-                </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/80">
-                  {audioVolume >= 12 ? 'Suara Jelas' : 'Bicara Sekarang'}
-                </span>
-              </div>
+              <p className="text-xs text-text-muted text-center">
+                Merekam… klik tombol kotak untuk selesai. ({formatDuration(recordingDuration)})
+              </p>
 
-              {/* Dynamic WhatsApp Dancing Waveform Bars */}
-              <div className="w-full bg-bg-nav/95 border border-border-main rounded-2xl p-4 flex items-center justify-center gap-1.5 h-24 shadow-inner">
+              {/* Dynamic Waveform Bars */}
+              <div className="w-full bg-bg-nav/95 border border-border-main rounded-2xl p-4 flex items-center justify-center gap-1.5 h-20 shadow-inner">
                 {waveBars.map((height, idx) => (
                   <div
                     key={idx}
@@ -521,18 +506,9 @@ export default function SpeakingExercise() {
                   />
                 ))}
               </div>
-
-              {/* Stop & Finish Action */}
-              <button
-                onClick={stopRecording}
-                className="px-6 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-red-500/20 active:scale-95 transition-all"
-              >
-                <Square className="w-4 h-4 fill-current" />
-                Selesai Bicara & Buat VN
-              </button>
             </div>
           ) : audioUrl ? (
-            /* MODE 2: HASIL VN TERSEDIA (WHATSAPP VOICE NOTE PLAYER) */
+            /* MODE 2: HASIL REKAMAN TERSEDIA */
             <div className="w-full space-y-4 animate-fadeIn">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -540,8 +516,8 @@ export default function SpeakingExercise() {
                     <Volume2 className="w-3.5 h-3.5" />
                   </div>
                   <div>
-                    <h3 className="text-xs font-semibold text-white">Voice Note Rekaman Kamu</h3>
-                    <p className="text-[11px] text-text-muted">Dengarkan kembali pelafalanmu sebelum dianalisis</p>
+                    <h3 className="text-xs font-semibold text-white">Hasil Rekaman Suara</h3>
+                    <p className="text-[11px] text-text-muted">Dengarkan kembali rekaman ucapanmu</p>
                   </div>
                 </div>
 
@@ -554,12 +530,12 @@ export default function SpeakingExercise() {
                 </button>
               </div>
 
-              {/* Sleek WhatsApp VN Player Bubble */}
-              <div className="w-full bg-gradient-to-r from-bg-nav/95 via-bg-nav to-emerald-950/20 border border-emerald-500/30 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-center gap-4 shadow-xl">
+              {/* Audio Player Card */}
+              <div className="w-full bg-gradient-to-r from-bg-nav/95 via-bg-nav to-emerald-950/20 border border-border-main rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-center gap-4 shadow-sm">
                 {/* Play / Pause Circular Button */}
                 <button
                   onClick={togglePlayPause}
-                  className="w-12 h-12 rounded-full bg-emerald-500 hover:bg-emerald-400 text-bg-main flex items-center justify-center transition-all shadow-lg shadow-emerald-500/30 hover:scale-105 active:scale-95 shrink-0"
+                  className="w-12 h-12 rounded-full bg-emerald-500 hover:bg-emerald-400 text-bg-main flex items-center justify-center transition-all shadow-lg shadow-emerald-500/20 hover:scale-105 active:scale-95 shrink-0"
                   aria-label={isPlaying ? 'Jeda' : 'Putar'}
                 >
                   {isPlaying ? (
@@ -574,15 +550,13 @@ export default function SpeakingExercise() {
                   <div
                     onClick={handleSeek}
                     className="w-full h-8 flex items-center gap-1 cursor-pointer group px-1"
-                    title="Klik untuk geser durasi VN"
+                    title="Klik untuk geser durasi rekaman"
                   >
-                    {/* Simulated VN Waveform bars with played progress */}
                     {Array.from({ length: 32 }).map((_, i) => {
                       const dur = totalAudioDuration || recordingDuration || 1;
                       const barPercent = (i / 32) * 100;
                       const playedPercent = (playbackTime / dur) * 100;
                       const isPlayed = barPercent <= playedPercent;
-                      // Fixed rhythmic height variations like WhatsApp VN
                       const barHeights = [24, 45, 75, 90, 60, 35, 80, 100, 45, 65, 85, 30, 50, 95, 70, 40, 80, 60, 30, 90, 100, 50, 70, 35, 85, 60, 40, 75, 95, 55, 35, 60];
                       const height = barHeights[i % barHeights.length];
 
@@ -621,43 +595,28 @@ export default function SpeakingExercise() {
             <div className="flex flex-col items-center gap-3 text-center animate-fadeIn">
               <button
                 onClick={startRecording}
-                className="w-24 h-24 rounded-full border-2 border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 hover:border-emerald-400 flex items-center justify-center transition-all hover:scale-105 active:scale-95 shadow-lg shadow-emerald-500/10 group"
-                aria-label="Mulai Merekam Voice Note"
+                className="w-24 h-24 rounded-full border-2 border-border-main hover:border-brand-purple/60 hover:bg-white/5 flex items-center justify-center transition-all hover:scale-105 active:scale-95 group"
+                aria-label="Mulai Merekam"
               >
-                <Mic className="w-10 h-10 text-emerald-400 group-hover:text-emerald-300 transition-colors" />
+                <Mic className="w-9 h-9 text-white/90 group-hover:text-white transition-colors" />
               </button>
-              <div className="space-y-1">
-                <p className="text-sm font-medium text-white">Klik mikrofon lalu bicara dalam bahasa Inggris</p>
-                <p className="text-xs text-text-muted max-w-sm">
-                  Rekaman menggunakan sistem audio jernih (tanpa dering loopback) dengan transkripsi AI akurasi tinggi.
-                </p>
-              </div>
+              <p className="text-xs text-text-muted text-center">
+                Klik mikrofon lalu bicara dalam bahasa Inggris.
+              </p>
             </div>
           )}
 
           {/* Transcribing Indicator */}
           {isTranscribing && (
-            <div className="w-full flex items-center justify-center gap-2.5 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs animate-pulse">
+            <div className="w-full flex items-center justify-center gap-2.5 p-3 rounded-xl bg-brand-purple/10 border border-brand-purple/30 text-brand-purple text-xs animate-pulse">
               <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
-              <span>Mentranskripsi rekaman suara dengan Whisper AI akurasi tinggi...</span>
+              <span>Mentranskripsi ucapan...</span>
             </div>
           )}
 
-          {/* Transcription Result Box */}
-          <div className="w-full bg-bg-nav/90 border border-border-main rounded-xl p-4 sm:p-5 mt-1 space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-[11px] font-mono uppercase tracking-wider text-text-muted flex items-center gap-1.5">
-                <span>Hasil Transkripsi Suara:</span>
-                {transcript && (
-                  <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 font-semibold">
-                    <Check className="w-3 h-3" /> Akurat (Whisper AI)
-                  </span>
-                )}
-              </p>
-              {transcript && (
-                <span className="text-[10px] text-text-muted italic">Bisa diedit manual jika perlu</span>
-              )}
-            </div>
+          {/* Live Transcription Box */}
+          <div className="w-full bg-bg-nav/90 border border-border-main rounded-xl p-5 min-h-[110px] mt-2 space-y-2">
+            <p className="text-[11px] font-mono uppercase tracking-wider text-text-muted">Hasil Transkripsi Suara:</p>
 
             {transcript ? (
               <textarea
@@ -667,21 +626,18 @@ export default function SpeakingExercise() {
                   transcriptRef.current = e.target.value;
                 }}
                 rows={3}
-                className="w-full bg-black/20 border border-border-main/60 rounded-lg p-3 text-sm text-white/95 leading-relaxed focus:outline-none focus:border-brand-purple/80 transition-colors resize-y"
+                className="w-full bg-transparent border-0 p-0 text-sm text-white/95 italic leading-relaxed focus:outline-none resize-y"
                 placeholder="Transkrip ucapan bahasa Inggrismu..."
               />
             ) : (
-              <div className="py-4 text-center">
-                <p className="text-xs text-text-muted">
-                  {isRecording
-                    ? 'Bicaralah dalam bahasa Inggris... Suara Anda sedang direkam secara aman.'
-                    : 'Transkrip ucapan akan otomatis tertulis di sini setelah rekaman selesai.'}
-                </p>
-              </div>
+              <p className="text-xs text-text-muted">
+                Transkrip ucapan akan otomatis tertulis di sini saat kamu berbicara.
+              </p>
             )}
           </div>
         </div>
       </div>
+
 
 
       {analysisError && (
