@@ -367,48 +367,162 @@ export async function evaluateSpeaking(transcription: string): Promise<SpeakingF
 }
 
 // Comprehensive suppression of OpenAI Whisper/Gemini silence or background hiss hallucinations
-const isSilenceHallucination = (raw: string): boolean => {
-  const norm = raw.toLowerCase().replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!norm) return true;
-  if (norm.length <= 2) return true;
+export const isSilenceHallucination = (raw: string): boolean => {
+  if (!raw) return true;
+  const trimmed = raw.trim();
+  if (!trimmed) return true;
 
-  const exactHallucinations = new Set([
+  // 1. Remove bracketed/parenthetical sound annotations: [music], (applause), *whispers*, etc.
+  const withoutSoundTags = trimmed
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\([^\)]*\)/g, ' ')
+    .replace(/\*[^\*]*\*/g, ' ')
+    .replace(/[♪♫\u266a\u266b]/g, ' ')
+    .trim();
+
+  if (!withoutSoundTags) return true;
+
+  // Normalize: lowercased, only letters and single spaces
+  const norm = withoutSoundTags.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!norm || norm.length <= 2) return true;
+
+  // 2. Common Whisper silence/noise phantom hallucinations
+  const phantomPhrases = new Set([
+    // Youtube / caption artifact phrases
     'thank you',
     'thank you very much',
     'thank you so much',
     'thank you for watching',
     'thanks for watching',
+    'thank you for listening',
+    'thanks for listening',
+    'thank you for your time',
+    'thanks for your time',
     'thanks',
     'thank you bye',
     'thank you goodbye',
+    'thanks bye',
     'bye',
     'bye bye',
     'goodbye',
+    'see you next time',
+    'see you soon',
+    'see you',
     'watching',
     'subtitles by',
     'subtitles by the amaraorg community',
+    'subtitles by the amara org community',
+    'subtitles by amara org',
     'silence',
     'music',
     'applause',
-    'so',
-    'you',
+    'laughter',
+    'cough',
+    'coughing',
+    'sigh',
+    'sighs',
+    'breathing',
+    'whispering',
+    'inaudible',
+    'blank audio',
     'like and subscribe',
     'please subscribe',
     'dont forget to subscribe',
+    'subscribe to my channel',
+    'subscribe',
+    'welcome back',
+    'peace',
+
+    // Low-volume noise / breathing single phantom words
+    'you',
+    'so',
+    'the',
+    'to',
+    'a',
+    'an',
+    'it',
+    'is',
+    'in',
+    'on',
+    'of',
+    'and',
+    'or',
+    'hello',
+    'hi',
+    'hey',
+    'yes',
+    'yeah',
+    'yep',
+    'no',
+    'nah',
+    'ok',
+    'okay',
+    'uh',
+    'um',
+    'ah',
+    'oh',
+    'hmm',
+    'huh',
+    'ha',
+    'shh',
+    'whoa',
   ]);
 
-  if (exactHallucinations.has(norm)) return true;
+  if (phantomPhrases.has(norm)) return true;
 
-  const words = norm.split(' ');
-  const isAllThankOrSubs = words.every(w => ['thank', 'you', 'thanks', 'very', 'much', 'so', 'for', 'watching', 'bye', 'goodbye', 'subscribe'].includes(w));
-  if (isAllThankOrSubs && words.length <= 12) return true;
+  // 3. Subtitle / community credits / subscribe leakage
+  if (
+    norm.includes('subtitles by') ||
+    norm.includes('amara org') ||
+    norm.includes('amaraorg') ||
+    norm.includes('thanks for watching') ||
+    norm.includes('thank you for watching') ||
+    norm.includes('please subscribe') ||
+    norm.includes('like and subscribe') ||
+    norm.includes('translated by') ||
+    norm.includes('transcribed by')
+  ) {
+    return true;
+  }
 
-  if (norm.includes('subtitles by') || norm.includes('amara org') || norm.includes('thanks for watching')) {
+  // 4. Repetitive noise loops: e.g. "you you you", "so so", "thank you thank you"
+  const words = norm.split(' ').filter(Boolean);
+  if (words.length <= 1) {
+    // If it's only 1 word and under 4 characters or matches any filler/phantom
+    if (words[0].length <= 3 || phantomPhrases.has(words[0])) return true;
+  }
+
+  const uniqueWords = new Set(words);
+  if (uniqueWords.size === 1 && words.length > 1) {
+    return true;
+  }
+
+  // Permutations composed entirely of phantom words
+  const phantomTokens = new Set([
+    'thank', 'thanks', 'you', 'very', 'much', 'so', 'for', 'watching', 'listening',
+    'bye', 'goodbye', 'subscribe', 'like', 'video', 'next', 'time', 'see', 'please',
+    'uh', 'um', 'ah', 'oh', 'hmm', 'yeah', 'ok', 'okay', 'hello', 'hi'
+  ]);
+  if (words.length <= 8 && words.every(w => phantomTokens.has(w))) {
     return true;
   }
 
   return false;
 };
+
+// Normalisasi pelafalan dan ejaan nama kota / daerah Indonesia agar tidak ter-Inggriskan
+const normalizeIndonesianProperNouns = (text: string): string => {
+  if (!text) return '';
+  return text
+    .replace(/\b(Djakarta)\b/gi, 'Jakarta')
+    .replace(/\b(Bandoeng)\b/gi, 'Bandung')
+    .replace(/\b(Surabaja|Soerabaia|Soerabaja)\b/gi, 'Surabaya')
+    .replace(/\b(Djokjakarta|Jogjakarta|Yogjakarta)\b/gi, 'Yogyakarta')
+    .replace(/\b(Semerang)\b/gi, 'Semarang');
+};
+
+const WHISPER_PROMPT =
+  'Transcribe speech with absolute fidelity. Preserve Indonesian city, province, and regional names (such as Jakarta, Bogor, Depok, Tangerang, Bekasi, Bandung, Semarang, Solo, Surakarta, Yogyakarta, Jogja, Surabaya, Malang, Bali, Denpasar, Lombok, Medan, Padang, Palembang, Lampung, Batam, Pekanbaru, Banda Aceh, Pontianak, Banjarmasin, Balikpapan, Samarinda, Makassar, Manado, Mataram, Kupang, Ambon, Jayapura, Papua, Jawa, Sumatra, Kalimantan, Sulawesi) and Indonesian cultural or anomaly terms (such as rendang, batik, nasi goreng, sate, sambal, bakso, tempe, tahu, gado-gado, warung, angkot, rupiah) with their exact authentic Indonesian spelling. Do NOT anglicize, alter, or translate Indonesian place names, geographical names, or cultural words into English. If the recording contains only silence, background static, breathing, or no human speech, output nothing.';
 
 /**
  * Transkripsi audio rekaman suara pengguna seperti VN WhatsApp menggunakan Groq Whisper
@@ -424,7 +538,7 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
       const formData = new FormData();
       formData.append('file', audioBlob, `speech_recording.${ext}`);
       formData.append('model', 'whisper-large-v3-turbo');
-      formData.append('language', 'en');
+      formData.append('prompt', WHISPER_PROMPT);
       formData.append('response_format', 'json');
 
       const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
@@ -445,7 +559,7 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
         }
 
         if (text) {
-          return text;
+          return normalizeIndonesianProperNouns(text);
         }
       } else {
         const errText = await res.text().catch(() => '');
@@ -486,7 +600,12 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
                 },
               },
               {
-                text: 'Transcribe the spoken English speech in this audio accurately. Return ONLY the plain transcribed English text, without markdown, quotes, or conversational explanations.',
+                text: `Transcribe the speech in this audio accurately.
+CRITICAL RULES:
+1. If the speaker speaks English, transcribe in English, but preserve all Indonesian city, regional, and geographical names (e.g., Jakarta, Bogor, Depok, Tangerang, Bekasi, Bandung, Semarang, Yogyakarta, Jogja, Solo, Surabaya, Malang, Bali, Medan, Palembang, Padang, Makassar, etc.) and cultural/local terms (e.g., rendang, batik, nasi goreng, warung) in their original authentic Indonesian spelling. DO NOT anglicize or translate Indonesian proper nouns into English words.
+2. If the speaker speaks in Indonesian or only says Indonesian place/regional names or words, transcribe them in authentic Indonesian without translating to English.
+3. If there is only silence, breathing, background noise, or no distinct human speech, return an EMPTY string.
+4. Return ONLY the plain transcribed text without markdown, quotes, or conversational explanations.`,
               },
             ],
           },
@@ -498,7 +617,7 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
         text = '';
       }
       if (text) {
-        return text;
+        return normalizeIndonesianProperNouns(text);
       }
     }
   } catch (err: any) {
