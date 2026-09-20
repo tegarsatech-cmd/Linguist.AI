@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   LogIn,
@@ -15,7 +15,6 @@ import {
   Clock,
   Compass,
   Key,
-  Link2,
 } from "lucide-react";
 import { useAuth, translateAuthError } from "../contexts/AuthContext";
 import { getClientIp, getDeviceFingerprint } from "../lib/securityStore";
@@ -47,9 +46,8 @@ export default function Login() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // OTP & Direct Link Verification States
+  // OTP Verification States
   const [otpCode, setOtpCode] = useState("");
-  const [pastedLink, setPastedLink] = useState("");
   const [isVerifyingManual, setIsVerifyingManual] = useState(false);
   const [isResendingEmail, setIsResendingEmail] = useState(false);
 
@@ -127,7 +125,6 @@ export default function Login() {
     setPassword("");
     setConfirmPassword("");
     setOtpCode("");
-    setPastedLink("");
   };
 
   const handleRateLimitFailure = () => {
@@ -219,7 +216,7 @@ export default function Login() {
       try {
         await resetPassword(cleanEmail);
         setSuccess(
-          "Tautan reset kata sandi telah dikirim ke email Anda! Jika tautan di email mengarah ke localhost atau tidak dapat dibuka di HP, gunakan formulir verifikasi kode/link di bawah."
+          "Kode reset kata sandi telah dikirim ke email Anda! Silakan periksa inbox/spam Gmail Anda dan masukkan kode 6-digit di formulir bawah."
         );
       } catch (err: any) {
         setError(translateAuthError(err));
@@ -245,7 +242,7 @@ export default function Login() {
         if (res?.requiresConfirmation) {
           setMode("verify");
           setSuccess(
-            `Pendaftaran berhasil! Tautan atau kode verifikasi telah dikirim ke ${cleanEmail}. Masukkan kode 6-angka dari email Anda atau tempel link email di bawah.`
+            `Pendaftaran berhasil! Kode verifikasi OTP telah dikirim ke ${cleanEmail}. Masukkan 6-digit kode OTP di bawah.`
           );
         } else {
           setSuccess("Pendaftaran berhasil dan akun Anda langsung aktif!");
@@ -276,7 +273,7 @@ export default function Login() {
         handleRateLimitFailure();
       } else if (errorMsg.includes("Email not confirmed") || errorMsg.includes("email_not_confirmed")) {
         setError(
-          "Email Anda belum dikonfirmasi. Silakan buka menu verifikasi untuk memasukkan kode OTP / link email Anda."
+          "Email Anda belum dikonfirmasi. Silakan buka menu verifikasi untuk memasukkan 6-digit kode OTP email Anda."
         );
       } else {
         setError(translateAuthError(err));
@@ -297,21 +294,16 @@ export default function Login() {
       return;
     }
 
-    if (!otpCode.trim() && !pastedLink.trim()) {
-      setError("Masukkan kode 6-digit dari email Anda atau tempel tautan konfirmasi email.");
+    if (!otpCode.trim()) {
+      setError("Silakan masukkan kode OTP 6-digit dari email Anda.");
       return;
     }
 
     setIsVerifyingManual(true);
     try {
-      if (otpCode.trim()) {
-        await verifySignupOtp(cleanEmail, otpCode.trim());
-      } else if (pastedLink.trim()) {
-        await setSessionFromUrl(pastedLink.trim());
-      }
+      await verifySignupOtp(cleanEmail, otpCode.trim());
       setSuccess("Email berhasil diverifikasi! Selamat datang di Linguist.AI.");
       setOtpCode("");
-      setPastedLink("");
     } catch (err: any) {
       setError(translateAuthError(err));
     } finally {
@@ -331,7 +323,7 @@ export default function Login() {
     setSuccess("");
     try {
       await resendConfirmationEmail(cleanEmail);
-      setSuccess(`Email konfirmasi baru telah dikirim ke ${cleanEmail}. Silakan periksa inbox atau spam email Anda.`);
+      setSuccess(`Kode OTP konfirmasi baru telah dikirim ke ${cleanEmail}. Silakan periksa inbox atau spam Gmail Anda.`);
     } catch (err: any) {
       setError(translateAuthError(err));
     } finally {
@@ -344,28 +336,23 @@ export default function Login() {
     setError("");
     setSuccess("");
 
-    if (!otpCode.trim() && !pastedLink.trim()) {
-      setError("Silakan masukkan kode 6-digit dari email atau tempelkan tautan email.");
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError("Silakan masukkan alamat email Anda di atas.");
+      return;
+    }
+
+    if (!otpCode.trim()) {
+      setError("Silakan masukkan kode OTP 6-digit dari email Anda.");
       return;
     }
 
     setIsVerifyingManual(true);
     try {
-      if (otpCode.trim()) {
-        const cleanEmail = email.trim();
-        if (!cleanEmail) {
-          setError("Silakan masukkan alamat email Anda di atas.");
-          setIsVerifyingManual(false);
-          return;
-        }
-        await verifyResetCode(cleanEmail, otpCode.trim());
-      } else if (pastedLink.trim()) {
-        await setSessionFromUrl(pastedLink.trim());
-      }
+      await verifyResetCode(cleanEmail, otpCode.trim());
       setMode("reset");
-      setSuccess("Verifikasi berhasil! Silakan masukkan kata sandi baru Anda di bawah ini.");
+      setSuccess("Verifikasi OTP berhasil! Silakan masukkan kata sandi baru Anda di bawah ini.");
       setOtpCode("");
-      setPastedLink("");
     } catch (err: any) {
       setError(translateAuthError(err));
     } finally {
@@ -526,31 +513,14 @@ export default function Login() {
                 disabled={isVerifyingManual || isResendingEmail}
                 className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 px-3.5 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue font-mono text-center tracking-widest text-lg"
               />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block text-left">
-                Atau Tempel Tautan Konfirmasi dari Email
-              </label>
-              <div className="relative">
-                <Link2 className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
-                <input
-                  type="text"
-                  value={pastedLink}
-                  onChange={(e) => setPastedLink(e.target.value)}
-                  placeholder="http://localhost:3000/#access_token=... atau https://..."
-                  disabled={isVerifyingManual || isResendingEmail}
-                  className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-3.5 text-xs text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue font-mono"
-                />
-              </div>
               <p className="text-[10px] text-text-muted mt-1">
-                Jika link email mengarah ke localhost atau gagal dibuka di HP, salin tautan tersebut dan tempel di sini.
+                Silakan periksa kotak masuk atau spam Gmail Anda untuk melihat 6-digit kode verifikasi OTP.
               </p>
             </div>
 
             <button
               type="button"
-              disabled={isVerifyingManual || (!otpCode.trim() && !pastedLink.trim())}
+              disabled={isVerifyingManual || !otpCode.trim()}
               onClick={handleVerifySignup}
               className="w-full mt-3 bg-brand-blue hover:bg-brand-blue/90 disabled:opacity-50 border border-brand-blue/50 text-white font-medium py-3 px-4 rounded-xl text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-brand-blue/10 active:scale-[0.99]"
             >
@@ -603,7 +573,7 @@ export default function Login() {
                       if (error) setError("");
                     }}
                     placeholder="nama@email.com"
-                    disabled={loading || isLocked}
+                    disabled={loading || (mode === "login" && isLocked)}
                     className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue focus:ring-1 focus:ring-brand-blue/30 transition-all disabled:opacity-50"
                   />
                 </div>
@@ -639,7 +609,7 @@ export default function Login() {
                       if (error) setError("");
                     }}
                     placeholder="••••••••"
-                    disabled={loading || isLocked}
+                    disabled={loading || (mode === "login" && isLocked)}
                     className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-11 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue focus:ring-1 focus:ring-brand-blue/30 transition-all disabled:opacity-50"
                   />
                   <button
@@ -766,28 +736,28 @@ export default function Login() {
               ) : (
                 <>
                   <KeyRound className="w-4 h-4" />
-                  Kirim Tautan Reset
+                  Kirim Kode Reset OTP
                 </>
               )}
             </button>
           </form>
         )}
 
-        {/* Verifikasi Kode OTP / Tautan Email (Bypass masalah link localhost) */}
+        {/* Verifikasi Kode OTP Reset Sandi */}
         {mode === "forgot" && (
           <div className="mt-6 pt-5 border-t border-border-main/80 space-y-3.5 text-left">
             <div className="flex items-center gap-2 text-white text-xs font-semibold">
               <Key className="w-4 h-4 text-brand-blue" />
-              <span>Punya Kode Verifikasi atau Link Email?</span>
+              <span>Masukkan Kode OTP dari Email</span>
             </div>
             <p className="text-[11px] text-text-muted leading-relaxed">
-              Jika tautan di email Anda mengarah ke <strong className="text-white font-mono">localhost</strong> atau tidak bisa dibuka di HP, masukkan kode OTP 6-angka dari email atau tempelkan link email tersebut di bawah ini:
+              Masukkan 6-digit kode verifikasi OTP yang masuk ke kotak masuk atau spam Gmail Anda di bawah ini:
             </p>
 
             <div className="space-y-3">
               <div>
                 <label className="text-[10px] font-mono uppercase text-text-dim block mb-1">
-                  1. Masukkan Kode 6-Digit dari Email (OTP)
+                  Kode 6-Digit OTP dari Email
                 </label>
                 <input
                   type="text"
@@ -799,26 +769,11 @@ export default function Login() {
                 />
               </div>
 
-              <div>
-                <label className="text-[10px] font-mono uppercase text-text-dim block mb-1">
-                  2. Atau Tempel Tautan Lengkap dari Email
-                </label>
-                <div className="relative">
-                  <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
-                  <input
-                    type="text"
-                    value={pastedLink}
-                    onChange={(e) => setPastedLink(e.target.value)}
-                    placeholder="http://localhost:3000/#access_token=..."
-                    disabled={isVerifyingManual}
-                    className="w-full bg-bg-nav border border-border-main rounded-xl py-2 pl-9 pr-3 text-xs text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue font-mono"
-                  />
-                </div>
-              </div>
+              
 
               <button
                 type="button"
-                disabled={isVerifyingManual || (!otpCode.trim() && !pastedLink.trim())}
+                disabled={isVerifyingManual || !otpCode.trim()}
                 onClick={handleManualVerification}
                 className="w-full bg-white/10 hover:bg-white/15 disabled:opacity-40 border border-white/15 text-white font-medium py-2.5 px-3 rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-sm"
               >
@@ -827,7 +782,7 @@ export default function Login() {
                 ) : (
                   <>
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Verifikasi & Buat Kata Sandi Baru</span>
+                    <span>Verifikasi OTP & Buat Kata Sandi Baru</span>
                   </>
                 )}
               </button>
