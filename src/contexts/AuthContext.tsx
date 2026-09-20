@@ -2,14 +2,16 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
-interface AuthContextType {
+export interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string) => Promise<{ requiresConfirmation: boolean; user: User | null }>;
+  verifySignupOtp: (email: string, token: string) => Promise<void>;
+  resendConfirmationEmail: (email: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   verifyResetCode: (email: string, token: string) => Promise<void>;
-  setSessionFromUrl: (rawUrlOrHash: string) => Promise<void>;
+  setSessionFromUrl: (rawUrlOrHash: string) => Promise<{ type?: string; user: User | null }>;
   updatePassword: (newPassword: string) => Promise<void>;
   loginAsGuest: () => void;
   logout: () => Promise<void>;
@@ -19,7 +21,7 @@ export function translateAuthError(error: any): string {
   if (!error) return "Terjadi kesalahan. Silakan coba lagi.";
   const msg = typeof error === "string" ? error : error.message || "";
 
-  if (/invalid login credentials/i.test(msg)) {
+  if (/invalid login credentials|invalid_credentials/i.test(msg)) {
     return "Email atau kata sandi tidak valid. Periksa kembali akun Anda.";
   }
   if (/user already registered/i.test(msg)) {
@@ -28,20 +30,20 @@ export function translateAuthError(error: any): string {
   if (/password should be at least 6 characters/i.test(msg)) {
     return "Kata sandi minimal harus terdiri dari 6 karakter.";
   }
-  if (/email not confirmed/i.test(msg)) {
-    return "Email belum dikonfirmasi. Periksa kotak masuk atau spam email Anda.";
+  if (/email not confirmed|email_not_confirmed/i.test(msg)) {
+    return "Email belum dikonfirmasi. Periksa kotak masuk atau spam email Anda untuk mengaktifkan akun.";
   }
   if (/signup requires a valid password/i.test(msg)) {
     return "Silakan masukkan kata sandi yang valid.";
   }
-  if (/rate limit/i.test(msg) || /over_email_send_rate_limit/i.test(msg)) {
-    return "Layanan email dibatasi sementara karena terlalu banyak permintaan (rate limit Supabase). Silakan periksa inbox/spam email Anda karena tautan/kode verifikasi sebelumnya mungkin sudah masuk, atau coba lagi setelah beberapa menit.";
+  if (/rate limit|over_email_send_rate_limit|too many requests|429/i.test(msg)) {
+    return "Layanan email dibatasi sementara karena batas permintaan (rate limit). Silakan periksa inbox/spam email Anda karena tautan/kode verifikasi mungkin sudah terkirim, gunakan mode tamu, atau coba lagi dalam beberapa menit.";
   }
-  if (/network/i.test(msg) || /failed to fetch/i.test(msg)) {
+  if (/network|failed to fetch/i.test(msg)) {
     return "Gagal terhubung ke server. Periksa koneksi internet Anda.";
   }
-  if (/token.*expired|invalid token|otp.*expired|token is invalid|recovery token/i.test(msg)) {
-    return "Kode verifikasi atau tautan telah kedaluwarsa atau tidak valid. Silakan periksa kembali atau minta tautan baru.";
+  if (/token.*expired|invalid token|otp.*expired|token is invalid|recovery token|link is invalid/i.test(msg)) {
+    return "Kode verifikasi atau tautan telah kedaluwarsa atau tidak valid. Silakan periksa kembali atau minta kode/tautan baru.";
   }
   if (/user not found/i.test(msg)) {
     return "Akun dengan alamat email ini tidak ditemukan.";
@@ -130,6 +132,69 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
+    // Otomatis proses token verifikasi / OTP / code jika dibuka dari tautan email
+    const handleUrlAuth = async () => {
+      try {
+        const search = window.location.search || "";
+        const hash = window.location.hash || "";
+
+        // 1. Tangani token_hash dari tautan verifikasi Supabase
+        if (search.includes("token_hash=")) {
+          const params = new URLSearchParams(search);
+          const token_hash = params.get("token_hash");
+          const type = (params.get("type") || "signup") as any;
+          if (token_hash) {
+            const { data, error } = await supabase.auth.verifyOtp({
+              token_hash,
+              type,
+            });
+            if (!error && data?.user && isMounted) {
+              setUser(data.user);
+              window.history.replaceState(null, "", window.location.pathname);
+              return;
+            }
+          }
+        }
+
+        // 2. Tangani PKCE authorization code (?code=...)
+        if (search.includes("code=")) {
+          const params = new URLSearchParams(search);
+          const code = params.get("code");
+          if (code) {
+            const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+            if (!error && data?.user && isMounted) {
+              setUser(data.user);
+              window.history.replaceState(null, "", window.location.pathname);
+              return;
+            }
+          }
+        }
+
+        // 3. Tangani access_token di fragment hash (#access_token=...)
+        if (hash.includes("access_token=")) {
+          const params = new URLSearchParams(hash.replace(/^#/, ""));
+          const access_token = params.get("access_token");
+          const refresh_token = params.get("refresh_token") || "";
+          if (access_token) {
+            const { data, error } = await supabase.auth.setSession({
+              access_token,
+              refresh_token,
+            });
+            if (!error && data?.user && isMounted) {
+              setUser(data.user);
+              if (!hash.includes("type=recovery")) {
+                window.history.replaceState(null, "", window.location.pathname);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Notice: Gagal memproses tautan autentikasi otomatis:", e);
+      }
+    };
+
+    handleUrlAuth();
+
     return () => {
       isMounted = false;
       clearTimeout(safetyTimer);
@@ -160,7 +225,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Koneksi login timeout. Periksa internet Anda.")), 10000)
+        setTimeout(() => reject(new Error("Koneksi login timeout. Periksa internet Anda.")), 15000)
       );
 
       const { error } = await Promise.race([loginPromise, timeoutPromise]);
@@ -183,13 +248,71 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Koneksi pendaftaran timeout. Silakan coba lagi.")), 10000)
+        setTimeout(() => reject(new Error("Koneksi pendaftaran timeout. Silakan coba lagi.")), 15000)
       );
 
-      const { error } = await Promise.race([regPromise, timeoutPromise]);
+      const { data, error } = await Promise.race([regPromise, timeoutPromise]);
       if (error) throw error;
+
+      if (data?.session?.user) {
+        setUser(data.session.user);
+        return { requiresConfirmation: false, user: data.session.user };
+      }
+
+      return {
+        requiresConfirmation: true,
+        user: data?.user || null,
+      };
     } catch (error) {
       console.error("Register Error:", error);
+      throw error;
+    }
+  };
+
+  const verifySignupOtp = async (email: string, token: string) => {
+    const cleanEmail = email.trim();
+    const cleanToken = token.trim();
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: cleanEmail,
+        token: cleanToken,
+        type: 'signup',
+      });
+      if (error) {
+        // Fallback: coba type 'email' jika 'signup' gagal
+        const retry = await supabase.auth.verifyOtp({
+          email: cleanEmail,
+          token: cleanToken,
+          type: 'email',
+        });
+        if (retry.error) throw error;
+        if (retry.data?.user) {
+          setUser(retry.data.user);
+        }
+        return;
+      }
+      if (data?.user) {
+        setUser(data.user);
+      }
+    } catch (error) {
+      console.error("Verify Signup OTP Error:", error);
+      throw error;
+    }
+  };
+
+  const resendConfirmationEmail = async (email: string) => {
+    const cleanEmail = email.trim();
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: cleanEmail,
+        options: {
+          emailRedirectTo: window.location.origin,
+        },
+      });
+      if (error) throw error;
+    } catch (error) {
+      console.error("Resend Confirmation Error:", error);
       throw error;
     }
   };
@@ -226,26 +349,79 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const setSessionFromUrl = async (rawUrlOrHash: string) => {
     try {
-      let hash = rawUrlOrHash.trim();
-      if (hash.includes('#')) {
-        hash = hash.split('#')[1];
-      } else if (hash.includes('?')) {
-        hash = hash.split('?')[1];
+      let text = rawUrlOrHash.trim();
+      let urlObj: URL | null = null;
+      try {
+        if (text.startsWith("http://") || text.startsWith("https://")) {
+          urlObj = new URL(text);
+        }
+      } catch {
+        // Bukan format URL absolut
       }
-      const params = new URLSearchParams(hash);
-      const access_token = params.get('access_token');
-      const refresh_token = params.get('refresh_token') || '';
-      if (!access_token) {
-        throw new Error('Tautan tidak memuat token pemulihan yang valid.');
+
+      const searchParams = urlObj
+        ? urlObj.searchParams
+        : new URLSearchParams(text.includes('?') ? text.split('?')[1].split('#')[0] : '');
+      const hashString = urlObj
+        ? urlObj.hash.replace(/^#/, '')
+        : (text.includes('#') ? text.split('#')[1] : '');
+      const hashParams = new URLSearchParams(hashString);
+
+      const accessToken = hashParams.get('access_token') || searchParams.get('access_token');
+      const refreshToken = hashParams.get('refresh_token') || searchParams.get('refresh_token') || '';
+      const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash') || searchParams.get('token');
+      const type = (searchParams.get('type') || hashParams.get('type') || 'signup') as any;
+      const code = searchParams.get('code') || hashParams.get('code');
+
+      // 1. Verifikasi dengan Access Token
+      if (accessToken) {
+        const { data, error } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+        if (error) throw error;
+        if (data?.user) {
+          setUser(data.user);
+          return { type, user: data.user };
+        }
       }
-      const { data, error } = await supabase.auth.setSession({
-        access_token,
-        refresh_token,
-      });
-      if (error) throw error;
-      if (data?.user) {
-        setUser(data.user);
+
+      // 2. Verifikasi dengan Token Hash
+      if (tokenHash) {
+        const { data, error } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: type || 'signup',
+        });
+        if (error) {
+          if (type === 'signup') {
+            const retry = await supabase.auth.verifyOtp({
+              token_hash: tokenHash,
+              type: 'email' as any,
+            });
+            if (!retry.error && retry.data?.user) {
+              setUser(retry.data.user);
+              return { type: 'email', user: retry.data.user };
+            }
+          }
+          throw error;
+        }
+        if (data?.user) {
+          setUser(data.user);
+          return { type, user: data.user };
+        }
       }
+
+      // 3. Verifikasi dengan PKCE Code
+      if (code) {
+        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) throw error;
+        if (data?.user) {
+          setUser(data.user);
+          return { type, user: data.user };
+        }
+      }
+
+      throw new Error('Tautan tidak memuat token atau kode verifikasi yang valid.');
     } catch (error) {
       console.error("Set Session from URL Error:", error);
       throw error;
@@ -327,6 +503,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         login,
         register,
+        verifySignupOtp,
+        resendConfirmationEmail,
         resetPassword,
         verifyResetCode,
         setSessionFromUrl,

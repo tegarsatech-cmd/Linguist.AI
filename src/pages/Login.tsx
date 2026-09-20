@@ -19,17 +19,21 @@ import {
 } from "lucide-react";
 import { useAuth, translateAuthError } from "../contexts/AuthContext";
 
-type AuthMode = "login" | "register" | "forgot" | "reset";
+type AuthMode = "login" | "register" | "forgot" | "reset" | "verify";
 
 const STORAGE_FAIL_COUNT = "linguist_login_fail_count";
 const STORAGE_LOCKOUT_UNTIL = "linguist_login_lockout_until";
 const STORAGE_LOCKOUT_LEVEL = "linguist_login_lockout_level";
 const STORAGE_REMEMBERED_EMAIL = "linguist_saved_email";
+const STORAGE_RESET_COOLDOWN = "linguist_reset_cooldown_until";
+const STORAGE_RESEND_SIGNUP_COOLDOWN = "linguist_resend_signup_cooldown_until";
 
 export default function Login() {
   const {
     login,
     register,
+    verifySignupOtp,
+    resendConfirmationEmail,
     resetPassword,
     verifyResetCode,
     setSessionFromUrl,
@@ -47,25 +51,36 @@ export default function Login() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // OTP & Direct Link Verification States (untuk mengatasi masalah tautan email localhost)
+  // OTP & Direct Link Verification States (untuk mengatasi masalah tautan email localhost / belum aktif)
   const [otpCode, setOtpCode] = useState("");
   const [pastedLink, setPastedLink] = useState("");
   const [isVerifyingManual, setIsVerifyingManual] = useState(false);
+  const [isResendingEmail, setIsResendingEmail] = useState(false);
 
   // Rate Limiting States (Login)
   const [failCount, setFailCount] = useState(0);
   const [lockoutRemaining, setLockoutRemaining] = useState(0); // seconds
 
-  // Rate Limiting States (Kirim Tautan Reset Sandi: 60 detik cooldown)
+  // Rate Limiting States (Kirim Tautan Reset Sandi & Kirim Ulang Verifikasi Email: 60 detik cooldown)
   const [resetCooldown, setResetCooldown] = useState(0); // seconds
+  const [resendSignupCooldown, setResendSignupCooldown] = useState(0); // seconds
 
-  // Deteksi tautan reset kata sandi dari email Supabase (Recovery Token)
+  // Deteksi tautan reset kata sandi atau verifikasi email dari URL Supabase
   useEffect(() => {
     const hash = window.location.hash || "";
     const search = window.location.search || "";
     if (hash.includes("type=recovery") || search.includes("type=recovery")) {
       setMode("reset");
       setSuccess("Tautan pemulihan akun diverifikasi. Silakan masukkan kata sandi baru Anda di bawah ini.");
+    } else if (hash.includes("type=signup") || search.includes("type=signup") || search.includes("type=email")) {
+      setSuccess("Akun email berhasil diverifikasi! Anda sekarang dapat langsung masuk.");
+      setMode("login");
+    } else if (search.includes("error_description=")) {
+      const params = new URLSearchParams(search);
+      const desc = params.get("error_description");
+      if (desc) {
+        setError(translateAuthError(desc));
+      }
     }
   }, []);
 
@@ -86,15 +101,20 @@ export default function Login() {
       setLockoutRemaining(Math.ceil((lockoutUntil - now) / 1000));
     }
 
-    const resetCooldownUntil = parseInt(localStorage.getItem("linguist_reset_cooldown_until") || "0", 10);
+    const resetCooldownUntil = parseInt(localStorage.getItem(STORAGE_RESET_COOLDOWN) || "0", 10);
     if (resetCooldownUntil > now) {
       setResetCooldown(Math.ceil((resetCooldownUntil - now) / 1000));
     }
+
+    const resendSignupCooldownUntil = parseInt(localStorage.getItem(STORAGE_RESEND_SIGNUP_COOLDOWN) || "0", 10);
+    if (resendSignupCooldownUntil > now) {
+      setResendSignupCooldown(Math.ceil((resendSignupCooldownUntil - now) / 1000));
+    }
   }, []);
 
-  // Timer interval for rate limiting countdown & reset cooldown countdown
+  // Timer interval for rate limiting countdown & cooldowns
   useEffect(() => {
-    if (lockoutRemaining <= 0 && resetCooldown <= 0) return;
+    if (lockoutRemaining <= 0 && resetCooldown <= 0 && resendSignupCooldown <= 0) return;
 
     const timer = setInterval(() => {
       setLockoutRemaining((prev) => {
@@ -107,7 +127,15 @@ export default function Login() {
 
       setResetCooldown((prev) => {
         if (prev <= 1) {
-          localStorage.removeItem("linguist_reset_cooldown_until");
+          localStorage.removeItem(STORAGE_RESET_COOLDOWN);
+          return 0;
+        }
+        return prev - 1;
+      });
+
+      setResendSignupCooldown((prev) => {
+        if (prev <= 1) {
+          localStorage.removeItem(STORAGE_RESEND_SIGNUP_COOLDOWN);
           return 0;
         }
         return prev - 1;
@@ -115,7 +143,7 @@ export default function Login() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [lockoutRemaining, resetCooldown]);
+  }, [lockoutRemaining, resetCooldown, resendSignupCooldown]);
 
   const switchMode = (newMode: AuthMode) => {
     setMode(newMode);
@@ -123,6 +151,8 @@ export default function Login() {
     setSuccess("");
     setPassword("");
     setConfirmPassword("");
+    setOtpCode("");
+    setPastedLink("");
   };
 
   const handleRateLimitFailure = () => {
@@ -132,7 +162,6 @@ export default function Login() {
 
     if (newCount >= 3) {
       const currentLevel = parseInt(localStorage.getItem(STORAGE_LOCKOUT_LEVEL) || "1", 10);
-      // Level 1: 60s (1 min), Level 2: 120s (2 min), Level 3+: 300s (5 min)
       const lockSeconds = currentLevel === 1 ? 60 : currentLevel === 2 ? 120 : 300;
       const lockoutTimestamp = Date.now() + lockSeconds * 1000;
 
@@ -165,7 +194,7 @@ export default function Login() {
     setError("");
     setSuccess("");
 
-    // Mode: Reset Kata Sandi Baru dari tautan email
+    // Mode: Reset Kata Sandi Baru
     if (mode === "reset") {
       if (password.length < 6) {
         setError("Kata sandi baru minimal harus terdiri dari 6 karakter.");
@@ -197,7 +226,6 @@ export default function Login() {
       return;
     }
 
-    // Save or remove remembered email
     if (rememberMe) {
       localStorage.setItem(STORAGE_REMEMBERED_EMAIL, cleanEmail);
     } else {
@@ -213,10 +241,9 @@ export default function Login() {
       setLoading(true);
       try {
         await resetPassword(cleanEmail);
-        // Set 60 detik cooldown
         const cooldownSeconds = 60;
         const cooldownUntil = Date.now() + cooldownSeconds * 1000;
-        localStorage.setItem("linguist_reset_cooldown_until", cooldownUntil.toString());
+        localStorage.setItem(STORAGE_RESET_COOLDOWN, cooldownUntil.toString());
         setResetCooldown(cooldownSeconds);
 
         setSuccess(
@@ -242,8 +269,15 @@ export default function Login() {
 
       setLoading(true);
       try {
-        await register(cleanEmail, password);
-        setSuccess("Pendaftaran berhasil! Silakan periksa email Anda untuk tautan verifikasi akun.");
+        const res = await register(cleanEmail, password);
+        if (res?.requiresConfirmation) {
+          setMode("verify");
+          setSuccess(
+            `Pendaftaran berhasil! Tautan atau kode verifikasi telah dikirim ke ${cleanEmail}. Masukkan kode 6-angka dari email Anda atau tempel link email di bawah.`
+          );
+        } else {
+          setSuccess("Pendaftaran berhasil dan akun Anda langsung aktif!");
+        }
         setPassword("");
         setConfirmPassword("");
       } catch (err: any) {
@@ -263,17 +297,81 @@ export default function Login() {
     setLoading(true);
     try {
       await login(cleanEmail, password);
-      // Login successful, reset fail count
       clearRateLimit();
     } catch (err: any) {
       const errorMsg = err?.message || "";
       if (errorMsg.includes("Invalid login credentials") || errorMsg.includes("invalid_credentials")) {
         handleRateLimitFailure();
+      } else if (errorMsg.includes("Email not confirmed") || errorMsg.includes("email_not_confirmed")) {
+        setError(
+          "Email Anda belum dikonfirmasi. Silakan buka menu verifikasi untuk memasukkan kode OTP / link email Anda."
+        );
       } else {
         setError(translateAuthError(err));
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleVerifySignup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setSuccess("");
+
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError("Silakan masukkan alamat email Anda terlebih dahulu.");
+      return;
+    }
+
+    if (!otpCode.trim() && !pastedLink.trim()) {
+      setError("Masukkan kode 6-digit dari email Anda atau tempel tautan konfirmasi email.");
+      return;
+    }
+
+    setIsVerifyingManual(true);
+    try {
+      if (otpCode.trim()) {
+        await verifySignupOtp(cleanEmail, otpCode.trim());
+      } else if (pastedLink.trim()) {
+        await setSessionFromUrl(pastedLink.trim());
+      }
+      setSuccess("Email berhasil diverifikasi! Selamat datang di Linguist.AI.");
+      setOtpCode("");
+      setPastedLink("");
+    } catch (err: any) {
+      setError(translateAuthError(err));
+    } finally {
+      setIsVerifyingManual(false);
+    }
+  };
+
+  const handleResendSignupEmail = async () => {
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError("Silakan masukkan alamat email Anda terlebih dahulu.");
+      return;
+    }
+    if (resendSignupCooldown > 0) {
+      setError(`Mohon tunggu ${resendSignupCooldown} detik sebelum meminta email konfirmasi kembali.`);
+      return;
+    }
+
+    setIsResendingEmail(true);
+    setError("");
+    setSuccess("");
+    try {
+      await resendConfirmationEmail(cleanEmail);
+      const cooldownSeconds = 60;
+      const cooldownUntil = Date.now() + cooldownSeconds * 1000;
+      localStorage.setItem(STORAGE_RESEND_SIGNUP_COOLDOWN, cooldownUntil.toString());
+      setResendSignupCooldown(cooldownSeconds);
+      setSuccess(`Email konfirmasi baru telah dikirim ke ${cleanEmail}. Silakan periksa inbox atau spam email Anda.`);
+    } catch (err: any) {
+      setError(translateAuthError(err));
+    } finally {
+      setIsResendingEmail(false);
     }
   };
 
@@ -340,13 +438,14 @@ export default function Login() {
           <p className="text-xs text-text-muted mt-1.5 font-medium tracking-wide">
             {mode === "login" && "Masuk dengan email dan kata sandi Anda"}
             {mode === "register" && "Buat akun baru untuk mulai latihan dan evaluasi AI"}
+            {mode === "verify" && "Konfirmasi pendaftaran email Anda untuk mengaktifkan akun"}
             {mode === "forgot" && "Atur ulang kata sandi akun Anda"}
             {mode === "reset" && "Buat kata sandi baru untuk akun Anda"}
           </p>
         </div>
 
         {/* Tab Switcher (Login / Register) */}
-        {mode !== "forgot" && mode !== "reset" ? (
+        {mode !== "forgot" && mode !== "reset" && mode !== "verify" ? (
           <div className="flex bg-bg-nav p-1 rounded-xl border border-border-main mb-6">
             <button
               type="button"
@@ -430,190 +529,296 @@ export default function Login() {
           )}
         </AnimatePresence>
 
-        {/* Main Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Email Input (Hidden in 'reset' mode) */}
-          {mode !== "reset" && (
+        {/* Form Verifikasi Email Pendaftaran */}
+        {mode === "verify" && (
+          <div className="space-y-4 text-left">
             <div className="space-y-1.5">
               <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block text-left">
-                Alamat Email
+                Alamat Email Terdaftar
               </label>
               <div className="relative">
                 <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                 <input
                   type="email"
                   required
-                  autoComplete="email"
                   value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    if (error) setError("");
-                  }}
+                  onChange={(e) => setEmail(e.target.value)}
                   placeholder="nama@email.com"
-                  disabled={loading || isLocked}
-                  className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue focus:ring-1 focus:ring-brand-blue/30 transition-all disabled:opacity-50"
+                  disabled={isVerifyingManual || isResendingEmail}
+                  className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue font-sans"
                 />
               </div>
             </div>
-          )}
 
-          {/* Password Input (Hidden in 'forgot' mode) */}
-          {mode !== "forgot" && (
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center">
-                <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block">
-                  {mode === "reset" ? "Kata Sandi Baru" : "Kata Sandi"}
-                </label>
-                {mode === "login" && (
-                  <button
-                    type="button"
-                    onClick={() => switchMode("forgot")}
-                    className="text-[11px] text-brand-blue hover:text-brand-blue/80 hover:underline transition-colors"
-                  >
-                    Lupa kata sandi?
-                  </button>
-                )}
-              </div>
-              <div className="relative">
-                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  required
-                  autoComplete={mode === "login" ? "current-password" : "new-password"}
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    if (error) setError("");
-                  }}
-                  placeholder="••••••••"
-                  disabled={loading || isLocked}
-                  className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-11 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue focus:ring-1 focus:ring-brand-blue/30 transition-all disabled:opacity-50"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-white transition-colors p-1"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-
-              {(mode === "register" || mode === "reset") && (
-                <div className="flex items-center gap-2 pt-1 text-[11px]">
-                  <span
-                    className={`${
-                      password.length >= 6 ? "text-emerald-400" : "text-text-muted"
-                    }`}
-                  >
-                    • Minimal 6 karakter
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Confirm Password (only in 'register' or 'reset' mode) */}
-          {(mode === "register" || mode === "reset") && (
             <div className="space-y-1.5">
               <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block text-left">
-                {mode === "reset" ? "Konfirmasi Kata Sandi Baru" : "Konfirmasi Kata Sandi"}
+                Kode 6-Digit dari Email (OTP)
+              </label>
+              <input
+                type="text"
+                value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value)}
+                placeholder="Contoh: 123456"
+                disabled={isVerifyingManual || isResendingEmail}
+                className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 px-3.5 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue font-mono text-center tracking-widest text-lg"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block text-left">
+                Atau Tempel Tautan Konfirmasi dari Email
               </label>
               <div className="relative">
-                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                <Link2 className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                 <input
-                  type={showConfirmPassword ? "text" : "password"}
-                  required
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onChange={(e) => {
-                    setConfirmPassword(e.target.value);
-                    if (error) setError("");
-                  }}
-                  placeholder="Ulangi kata sandi"
-                  disabled={loading}
-                  className={`w-full bg-bg-nav border rounded-xl py-2.5 pl-10 pr-11 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:ring-1 transition-all disabled:opacity-50 ${
-                    isPasswordMismatch
-                      ? "border-red-500/50 focus:border-red-500 focus:ring-red-500/30"
-                      : "border-border-main focus:border-brand-blue focus:ring-brand-blue/30"
-                  }`}
+                  type="text"
+                  value={pastedLink}
+                  onChange={(e) => setPastedLink(e.target.value)}
+                  placeholder="http://localhost:3000/#access_token=... atau https://..."
+                  disabled={isVerifyingManual || isResendingEmail}
+                  className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-3.5 text-xs text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue font-mono"
                 />
+              </div>
+              <p className="text-[10px] text-text-muted mt-1">
+                Jika link email mengarah ke localhost atau gagal dibuka di HP, salin tautan tersebut dan tempel di sini.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={isVerifyingManual || (!otpCode.trim() && !pastedLink.trim())}
+              onClick={handleVerifySignup}
+              className="w-full mt-3 bg-brand-blue hover:bg-brand-blue/90 disabled:opacity-50 border border-brand-blue/50 text-white font-medium py-3 px-4 rounded-xl text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-brand-blue/10 active:scale-[0.99]"
+            >
+              {isVerifyingManual ? (
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span>Verifikasi & Aktifkan Akun</span>
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              disabled={isResendingEmail || resendSignupCooldown > 0}
+              onClick={handleResendSignupEmail}
+              className="w-full bg-white/5 hover:bg-white/10 disabled:opacity-40 border border-border-main text-text-dim hover:text-white font-medium py-2.5 px-3 rounded-xl text-xs transition-all flex items-center justify-center gap-2"
+            >
+              {isResendingEmail ? (
+                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : resendSignupCooldown > 0 ? (
+                <>
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Kirim Ulang Email ({resendSignupCooldown}s)</span>
+                </>
+              ) : (
+                <>
+                  <Mail className="w-3.5 h-3.5 text-brand-blue" />
+                  <span>Kirim Ulang Email Konfirmasi</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* Main Form (Login / Register / Forgot / Reset) */}
+        {mode !== "verify" && (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Email Input (Hidden in 'reset' mode) */}
+            {mode !== "reset" && (
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block text-left">
+                  Alamat Email
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                  <input
+                    type="email"
+                    required
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (error) setError("");
+                    }}
+                    placeholder="nama@email.com"
+                    disabled={loading || isLocked}
+                    className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue focus:ring-1 focus:ring-brand-blue/30 transition-all disabled:opacity-50"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Password Input (Hidden in 'forgot' mode) */}
+            {mode !== "forgot" && (
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block">
+                    {mode === "reset" ? "Kata Sandi Baru" : "Kata Sandi"}
+                  </label>
+                  {mode === "login" && (
+                    <button
+                      type="button"
+                      onClick={() => switchMode("forgot")}
+                      className="text-[11px] text-brand-blue hover:text-brand-blue/80 hover:underline transition-colors"
+                    >
+                      Lupa kata sandi?
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    required
+                    autoComplete={mode === "login" ? "current-password" : "new-password"}
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (error) setError("");
+                    }}
+                    placeholder="••••••••"
+                    disabled={loading || isLocked}
+                    className="w-full bg-bg-nav border border-border-main rounded-xl py-2.5 pl-10 pr-11 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:border-brand-blue focus:ring-1 focus:ring-brand-blue/30 transition-all disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-white transition-colors p-1"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+
+                {(mode === "register" || mode === "reset") && (
+                  <div className="flex items-center gap-2 pt-1 text-[11px]">
+                    <span
+                      className={`${
+                        password.length >= 6 ? "text-emerald-400" : "text-text-muted"
+                      }`}
+                    >
+                      • Minimal 6 karakter
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Confirm Password (only in 'register' or 'reset' mode) */}
+            {(mode === "register" || mode === "reset") && (
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-medium text-text-dim uppercase tracking-wider block text-left">
+                  {mode === "reset" ? "Konfirmasi Kata Sandi Baru" : "Konfirmasi Kata Sandi"}
+                </label>
+                <div className="relative">
+                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                  <input
+                    type={showConfirmPassword ? "text" : "password"}
+                    required
+                    autoComplete="new-password"
+                    value={confirmPassword}
+                    onChange={(e) => {
+                      setConfirmPassword(e.target.value);
+                      if (error) setError("");
+                    }}
+                    placeholder="Ulangi kata sandi"
+                    disabled={loading}
+                    className={`w-full bg-bg-nav border rounded-xl py-2.5 pl-10 pr-11 text-sm text-white placeholder:text-text-muted/60 focus:outline-none focus:ring-1 transition-all disabled:opacity-50 ${
+                      isPasswordMismatch
+                        ? "border-red-500/50 focus:border-red-500 focus:ring-red-500/30"
+                        : "border-border-main focus:border-brand-blue focus:ring-brand-blue/30"
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    aria-label={showConfirmPassword ? "Sembunyikan password" : "Tampilkan password"}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-white transition-colors p-1"
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {isPasswordMismatch && (
+                  <p className="text-[11px] text-red-400 text-left">Kata sandi tidak cocok</p>
+                )}
+              </div>
+            )}
+
+            {/* Remember Me Checkbox & Verifikasi Shortcut (only in 'login' mode) */}
+            {mode === "login" && (
+              <div className="flex items-center justify-between pt-1">
+                <div className="flex items-center gap-2">
+                  <input
+                    id="rememberMe"
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="w-4 h-4 rounded border-border-main bg-bg-nav text-brand-blue focus:ring-0 focus:ring-offset-0 cursor-pointer accent-brand-blue"
+                  />
+                  <label
+                    htmlFor="rememberMe"
+                    className="text-xs text-text-muted hover:text-text-dim cursor-pointer select-none"
+                  >
+                    Ingat email saya
+                  </label>
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                  aria-label={showConfirmPassword ? "Sembunyikan password" : "Tampilkan password"}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-white transition-colors p-1"
+                  onClick={() => switchMode("verify")}
+                  className="text-[11px] text-brand-blue hover:text-brand-blue/80 hover:underline transition-colors"
                 >
-                  {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  Verifikasi email
                 </button>
               </div>
-              {isPasswordMismatch && (
-                <p className="text-[11px] text-red-400 text-left">Kata sandi tidak cocok</p>
-              )}
-            </div>
-          )}
-
-          {/* Remember Me Checkbox (only in 'login' mode) */}
-          {mode === "login" && (
-            <div className="flex items-center gap-2 pt-1">
-              <input
-                id="rememberMe"
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-                className="w-4 h-4 rounded border-border-main bg-bg-nav text-brand-blue focus:ring-0 focus:ring-offset-0 cursor-pointer accent-brand-blue"
-              />
-              <label
-                htmlFor="rememberMe"
-                className="text-xs text-text-muted hover:text-text-dim cursor-pointer select-none"
-              >
-                Ingat email saya di perangkat ini
-              </label>
-            </div>
-          )}
-
-          {/* Submit Button */}
-          <button
-            type="submit"
-            disabled={
-              loading ||
-              isLocked ||
-              !isPasswordValid ||
-              isPasswordMismatch ||
-              (mode === "forgot" && resetCooldown > 0)
-            }
-            className="w-full mt-3 bg-brand-blue hover:bg-brand-blue/90 disabled:opacity-50 disabled:cursor-not-allowed border border-brand-blue/50 text-white font-medium py-3 px-4 rounded-xl text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-brand-blue/10 active:scale-[0.99]"
-          >
-            {loading ? (
-              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : mode === "login" ? (
-              <>
-                <LogIn className="w-4 h-4" />
-                {isLocked ? `Dibatasi (${lockoutRemaining}s)` : "Masuk Sekarang"}
-              </>
-            ) : mode === "register" ? (
-              <>
-                <UserPlus className="w-4 h-4" />
-                Buat Akun Baru
-              </>
-            ) : mode === "reset" ? (
-              <>
-                <KeyRound className="w-4 h-4" />
-                Simpan Kata Sandi Baru
-              </>
-            ) : mode === "forgot" && resetCooldown > 0 ? (
-              <>
-                <Clock className="w-4 h-4" />
-                Tunggu {resetCooldown} Detik
-              </>
-            ) : (
-              <>
-                <KeyRound className="w-4 h-4" />
-                Kirim Tautan Reset
-              </>
             )}
-          </button>
-        </form>
+
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={
+                loading ||
+                isLocked ||
+                !isPasswordValid ||
+                isPasswordMismatch ||
+                (mode === "forgot" && resetCooldown > 0)
+              }
+              className="w-full mt-3 bg-brand-blue hover:bg-brand-blue/90 disabled:opacity-50 disabled:cursor-not-allowed border border-brand-blue/50 text-white font-medium py-3 px-4 rounded-xl text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-brand-blue/10 active:scale-[0.99]"
+            >
+              {loading ? (
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : mode === "login" ? (
+                <>
+                  <LogIn className="w-4 h-4" />
+                  {isLocked ? `Dibatasi (${lockoutRemaining}s)` : "Masuk Sekarang"}
+                </>
+              ) : mode === "register" ? (
+                <>
+                  <UserPlus className="w-4 h-4" />
+                  Buat Akun Baru
+                </>
+              ) : mode === "reset" ? (
+                <>
+                  <KeyRound className="w-4 h-4" />
+                  Simpan Kata Sandi Baru
+                </>
+              ) : mode === "forgot" && resetCooldown > 0 ? (
+                <>
+                  <Clock className="w-4 h-4" />
+                  Tunggu {resetCooldown} Detik
+                </>
+              ) : (
+                <>
+                  <KeyRound className="w-4 h-4" />
+                  Kirim Tautan Reset
+                </>
+              )}
+            </button>
+          </form>
+        )}
 
         {/* Verifikasi Kode OTP / Tautan Email (Bypass masalah link localhost) */}
         {mode === "forgot" && (
