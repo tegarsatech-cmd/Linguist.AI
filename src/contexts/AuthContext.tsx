@@ -36,9 +36,6 @@ export function translateAuthError(error: any): string {
   if (/signup requires a valid password/i.test(msg)) {
     return "Silakan masukkan kata sandi yang valid.";
   }
-  if (/rate limit|over_email_send_rate_limit|too many requests|429/i.test(msg)) {
-    return "Layanan email dibatasi sementara karena batas permintaan (rate limit). Silakan periksa inbox/spam email Anda karena tautan/kode verifikasi mungkin sudah terkirim, gunakan mode tamu, atau coba lagi dalam beberapa menit.";
-  }
   if (/network|failed to fetch/i.test(msg)) {
     return "Gagal terhubung ke server. Periksa koneksi internet Anda.";
   }
@@ -252,7 +249,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
 
       const { data, error } = await Promise.race([regPromise, timeoutPromise]);
-      if (error) throw error;
+      if (error) {
+        // Jika pembatasan email sementara dari penyedia layanan terjadi, tetap arahkan pengguna ke verifikasi
+        if (/rate limit|over_email_send_rate_limit/i.test(error.message || "")) {
+          return { requiresConfirmation: true, user: null };
+        }
+        throw error;
+      }
 
       if (data?.session?.user) {
         setUser(data.session.user);
@@ -263,7 +266,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         requiresConfirmation: true,
         user: data?.user || null,
       };
-    } catch (error) {
+    } catch (error: any) {
+      if (/rate limit|over_email_send_rate_limit/i.test(error?.message || "")) {
+        return { requiresConfirmation: true, user: null };
+      }
       console.error("Register Error:", error);
       throw error;
     }

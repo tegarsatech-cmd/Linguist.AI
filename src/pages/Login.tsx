@@ -18,15 +18,11 @@ import {
   Link2,
 } from "lucide-react";
 import { useAuth, translateAuthError } from "../contexts/AuthContext";
+import { getClientIp, getDeviceFingerprint } from "../lib/securityStore";
 
 type AuthMode = "login" | "register" | "forgot" | "reset" | "verify";
 
-const STORAGE_FAIL_COUNT = "linguist_login_fail_count";
-const STORAGE_LOCKOUT_UNTIL = "linguist_login_lockout_until";
-const STORAGE_LOCKOUT_LEVEL = "linguist_login_lockout_level";
 const STORAGE_REMEMBERED_EMAIL = "linguist_saved_email";
-const STORAGE_RESET_COOLDOWN = "linguist_reset_cooldown_until";
-const STORAGE_RESEND_SIGNUP_COOLDOWN = "linguist_resend_signup_cooldown_until";
 
 export default function Login() {
   const {
@@ -51,19 +47,16 @@ export default function Login() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // OTP & Direct Link Verification States (untuk mengatasi masalah tautan email localhost / belum aktif)
+  // OTP & Direct Link Verification States
   const [otpCode, setOtpCode] = useState("");
   const [pastedLink, setPastedLink] = useState("");
   const [isVerifyingManual, setIsVerifyingManual] = useState(false);
   const [isResendingEmail, setIsResendingEmail] = useState(false);
 
-  // Rate Limiting States (Login)
+  // Rate Limiting States (Login berdasarkan IP / Perangkat)
+  const [clientIp, setClientIp] = useState("127.0.0.1");
   const [failCount, setFailCount] = useState(0);
   const [lockoutRemaining, setLockoutRemaining] = useState(0); // seconds
-
-  // Rate Limiting States (Kirim Tautan Reset Sandi & Kirim Ulang Verifikasi Email: 60 detik cooldown)
-  const [resetCooldown, setResetCooldown] = useState(0); // seconds
-  const [resendSignupCooldown, setResendSignupCooldown] = useState(0); // seconds
 
   // Deteksi tautan reset kata sandi atau verifikasi email dari URL Supabase
   useEffect(() => {
@@ -84,7 +77,7 @@ export default function Login() {
     }
   }, []);
 
-  // Initialize saved email and lockout state from localStorage
+  // Initialize client IP, remembered email, and IP-based lockout state
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_REMEMBERED_EMAIL);
     if (saved) {
@@ -92,50 +85,32 @@ export default function Login() {
       setRememberMe(true);
     }
 
-    const savedCount = parseInt(localStorage.getItem(STORAGE_FAIL_COUNT) || "0", 10);
-    setFailCount(savedCount);
+    getClientIp().then((ip) => {
+      const sanitizedIp = ip || "127.0.0.1";
+      setClientIp(sanitizedIp);
+      const ipFailKey = `linguist_login_fails_${sanitizedIp.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+      const ipLockoutKey = `linguist_login_lockout_${sanitizedIp.replace(/[^a-zA-Z0-9_]/g, "_")}`;
 
-    const lockoutUntil = parseInt(localStorage.getItem(STORAGE_LOCKOUT_UNTIL) || "0", 10);
-    const now = Date.now();
-    if (lockoutUntil > now) {
-      setLockoutRemaining(Math.ceil((lockoutUntil - now) / 1000));
-    }
+      const savedCount = parseInt(localStorage.getItem(ipFailKey) || "0", 10);
+      setFailCount(savedCount);
 
-    const resetCooldownUntil = parseInt(localStorage.getItem(STORAGE_RESET_COOLDOWN) || "0", 10);
-    if (resetCooldownUntil > now) {
-      setResetCooldown(Math.ceil((resetCooldownUntil - now) / 1000));
-    }
-
-    const resendSignupCooldownUntil = parseInt(localStorage.getItem(STORAGE_RESEND_SIGNUP_COOLDOWN) || "0", 10);
-    if (resendSignupCooldownUntil > now) {
-      setResendSignupCooldown(Math.ceil((resendSignupCooldownUntil - now) / 1000));
-    }
+      const lockoutUntil = parseInt(localStorage.getItem(ipLockoutKey) || "0", 10);
+      const now = Date.now();
+      if (lockoutUntil > now) {
+        setLockoutRemaining(Math.ceil((lockoutUntil - now) / 1000));
+      }
+    });
   }, []);
 
-  // Timer interval for rate limiting countdown & cooldowns
+  // Timer interval for login lockout countdown
   useEffect(() => {
-    if (lockoutRemaining <= 0 && resetCooldown <= 0 && resendSignupCooldown <= 0) return;
+    if (lockoutRemaining <= 0) return;
 
     const timer = setInterval(() => {
       setLockoutRemaining((prev) => {
         if (prev <= 1) {
-          localStorage.removeItem(STORAGE_LOCKOUT_UNTIL);
-          return 0;
-        }
-        return prev - 1;
-      });
-
-      setResetCooldown((prev) => {
-        if (prev <= 1) {
-          localStorage.removeItem(STORAGE_RESET_COOLDOWN);
-          return 0;
-        }
-        return prev - 1;
-      });
-
-      setResendSignupCooldown((prev) => {
-        if (prev <= 1) {
-          localStorage.removeItem(STORAGE_RESEND_SIGNUP_COOLDOWN);
+          const ipLockoutKey = `linguist_login_lockout_${clientIp.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+          localStorage.removeItem(ipLockoutKey);
           return 0;
         }
         return prev - 1;
@@ -143,7 +118,7 @@ export default function Login() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [lockoutRemaining, resetCooldown, resendSignupCooldown]);
+  }, [lockoutRemaining, clientIp]);
 
   const switchMode = (newMode: AuthMode) => {
     setMode(newMode);
@@ -158,23 +133,27 @@ export default function Login() {
   const handleRateLimitFailure = () => {
     const newCount = failCount + 1;
     setFailCount(newCount);
-    localStorage.setItem(STORAGE_FAIL_COUNT, newCount.toString());
+    const ipFailKey = `linguist_login_fails_${clientIp.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    const ipLockoutKey = `linguist_login_lockout_${clientIp.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    const ipLevelKey = `linguist_login_level_${clientIp.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+
+    localStorage.setItem(ipFailKey, newCount.toString());
 
     if (newCount >= 3) {
-      const currentLevel = parseInt(localStorage.getItem(STORAGE_LOCKOUT_LEVEL) || "1", 10);
+      const currentLevel = parseInt(localStorage.getItem(ipLevelKey) || "1", 10);
       const lockSeconds = currentLevel === 1 ? 60 : currentLevel === 2 ? 120 : 300;
       const lockoutTimestamp = Date.now() + lockSeconds * 1000;
 
-      localStorage.setItem(STORAGE_LOCKOUT_UNTIL, lockoutTimestamp.toString());
-      localStorage.setItem(STORAGE_LOCKOUT_LEVEL, (currentLevel + 1).toString());
+      localStorage.setItem(ipLockoutKey, lockoutTimestamp.toString());
+      localStorage.setItem(ipLevelKey, (currentLevel + 1).toString());
       setLockoutRemaining(lockSeconds);
       setError(
-        `Terlalu banyak percobaan salah (${newCount}x). Akun dibatasi sementara demi keamanan. Coba lagi dalam ${lockSeconds} detik.`
+        `Terlalu banyak percobaan salah (${newCount}x) dari IP ${clientIp}. Akses masuk dibatasi sementara demi keamanan. Coba lagi dalam ${lockSeconds} detik.`
       );
     } else {
       const remainingAttempts = 3 - newCount;
       setError(
-        `Email atau kata sandi salah. Percobaan ke-${newCount} dari 3. Sisa ${remainingAttempts} kali percobaan sebelum dibatasi 1 menit.`
+        `Email atau kata sandi salah. Percobaan ke-${newCount} dari 3 (IP: ${clientIp}). Sisa ${remainingAttempts} kali percobaan sebelum dibatasi 1 menit.`
       );
     }
   };
@@ -182,14 +161,17 @@ export default function Login() {
   const clearRateLimit = () => {
     setFailCount(0);
     setLockoutRemaining(0);
-    localStorage.removeItem(STORAGE_FAIL_COUNT);
-    localStorage.removeItem(STORAGE_LOCKOUT_UNTIL);
-    localStorage.removeItem(STORAGE_LOCKOUT_LEVEL);
+    const ipFailKey = `linguist_login_fails_${clientIp.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    const ipLockoutKey = `linguist_login_lockout_${clientIp.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    const ipLevelKey = `linguist_login_level_${clientIp.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    localStorage.removeItem(ipFailKey);
+    localStorage.removeItem(ipLockoutKey);
+    localStorage.removeItem(ipLevelKey);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (lockoutRemaining > 0) return;
+    if (lockoutRemaining > 0 && mode === "login") return;
 
     setError("");
     setSuccess("");
@@ -233,19 +215,9 @@ export default function Login() {
     }
 
     if (mode === "forgot") {
-      if (resetCooldown > 0) {
-        setError(`Mohon tunggu ${resetCooldown} detik sebelum meminta tautan reset sandi kembali.`);
-        return;
-      }
-
       setLoading(true);
       try {
         await resetPassword(cleanEmail);
-        const cooldownSeconds = 60;
-        const cooldownUntil = Date.now() + cooldownSeconds * 1000;
-        localStorage.setItem(STORAGE_RESET_COOLDOWN, cooldownUntil.toString());
-        setResetCooldown(cooldownSeconds);
-
         setSuccess(
           "Tautan reset kata sandi telah dikirim ke email Anda! Jika tautan di email mengarah ke localhost atau tidak dapat dibuka di HP, gunakan formulir verifikasi kode/link di bawah."
         );
@@ -353,20 +325,12 @@ export default function Login() {
       setError("Silakan masukkan alamat email Anda terlebih dahulu.");
       return;
     }
-    if (resendSignupCooldown > 0) {
-      setError(`Mohon tunggu ${resendSignupCooldown} detik sebelum meminta email konfirmasi kembali.`);
-      return;
-    }
 
     setIsResendingEmail(true);
     setError("");
     setSuccess("");
     try {
       await resendConfirmationEmail(cleanEmail);
-      const cooldownSeconds = 60;
-      const cooldownUntil = Date.now() + cooldownSeconds * 1000;
-      localStorage.setItem(STORAGE_RESEND_SIGNUP_COOLDOWN, cooldownUntil.toString());
-      setResendSignupCooldown(cooldownSeconds);
       setSuccess(`Email konfirmasi baru telah dikirim ke ${cleanEmail}. Silakan periksa inbox atau spam email Anda.`);
     } catch (err: any) {
       setError(translateAuthError(err));
@@ -485,14 +449,14 @@ export default function Login() {
           </div>
         )}
 
-        {/* Lockout Banner (Rate Limiting) */}
-        {isLocked && (
+        {/* Lockout Banner (Rate Limiting Login berdasarkan IP) */}
+        {isLocked && mode === "login" && (
           <div className="mb-5 flex items-center gap-3 p-4 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs">
             <Clock className="w-5 h-5 text-amber-400 shrink-0 animate-pulse" />
             <div>
-              <p className="font-semibold text-amber-200">Akses Masuk Dibatasi</p>
+              <p className="font-semibold text-amber-200">Akses Masuk Dibatasi ({clientIp})</p>
               <p className="text-amber-300/90 mt-0.5">
-                Salah kata sandi 3x berturut-turut. Tunggu{" "}
+                Salah kata sandi 3x berturut-turut pada alamat IP ini. Tunggu{" "}
                 <span className="font-mono font-bold text-white bg-amber-500/30 px-1.5 py-0.5 rounded">
                   {lockoutRemaining} detik
                 </span>{" "}
@@ -602,17 +566,12 @@ export default function Login() {
 
             <button
               type="button"
-              disabled={isResendingEmail || resendSignupCooldown > 0}
+              disabled={isResendingEmail}
               onClick={handleResendSignupEmail}
               className="w-full bg-white/5 hover:bg-white/10 disabled:opacity-40 border border-border-main text-text-dim hover:text-white font-medium py-2.5 px-3 rounded-xl text-xs transition-all flex items-center justify-center gap-2"
             >
               {isResendingEmail ? (
                 <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : resendSignupCooldown > 0 ? (
-                <>
-                  <Clock className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Kirim Ulang Email ({resendSignupCooldown}s)</span>
-                </>
               ) : (
                 <>
                   <Mail className="w-3.5 h-3.5 text-brand-blue" />
@@ -781,10 +740,9 @@ export default function Login() {
               type="submit"
               disabled={
                 loading ||
-                isLocked ||
+                (mode === "login" && isLocked) ||
                 !isPasswordValid ||
-                isPasswordMismatch ||
-                (mode === "forgot" && resetCooldown > 0)
+                isPasswordMismatch
               }
               className="w-full mt-3 bg-brand-blue hover:bg-brand-blue/90 disabled:opacity-50 disabled:cursor-not-allowed border border-brand-blue/50 text-white font-medium py-3 px-4 rounded-xl text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-brand-blue/10 active:scale-[0.99]"
             >
@@ -804,11 +762,6 @@ export default function Login() {
                 <>
                   <KeyRound className="w-4 h-4" />
                   Simpan Kata Sandi Baru
-                </>
-              ) : mode === "forgot" && resetCooldown > 0 ? (
-                <>
-                  <Clock className="w-4 h-4" />
-                  Tunggu {resetCooldown} Detik
                 </>
               ) : (
                 <>
