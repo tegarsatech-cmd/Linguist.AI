@@ -251,6 +251,50 @@ async function startServer() {
     }
   });
 
+  // --- Auth: Auto-confirm user via Supabase Admin REST API ---
+  // Endpoint ini digunakan setelah register agar user langsung bisa login tanpa verifikasi email.
+  app.post('/api/auth/confirm-user', async (req, res) => {
+    const { userId } = req.body || {};
+    if (!userId) {
+      return res.status(400).json({ error: 'userId diperlukan.' });
+    }
+
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://bwvpqznevaeatawrdrro.supabase.co';
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!serviceKey) {
+      // Jika tidak ada service role key, kembalikan sukses palsu agar frontend tetap berjalan
+      // User perlu konfirmasi email secara manual
+      return res.json({ success: false, message: 'Service role key tidak tersedia. Konfirmasi email diperlukan.' });
+    }
+
+    try {
+      const response = await fetch(`${supabaseUrl}/auth/v1/admin/users/${userId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${serviceKey}`,
+          'apikey': serviceKey,
+        },
+        body: JSON.stringify({
+          email_confirm: true,
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error('Supabase Admin confirm error:', errText);
+        return res.status(502).json({ success: false, message: 'Gagal konfirmasi via Supabase Admin.' });
+      }
+
+      console.log(`[AUTH] User ${userId} auto-confirmed via Admin API.`);
+      return res.json({ success: true });
+    } catch (e: any) {
+      console.error('Auto-confirm error:', e?.message);
+      return res.status(500).json({ success: false, message: 'Error saat konfirmasi.' });
+    }
+  });
+
   // --- Security & Moderation Endpoints ---
   app.get('/api/security/client-info', (req, res) => {
     const ip = getRequestIp(req);
@@ -467,6 +511,9 @@ async function startServer() {
         return res.json(JSON.parse(content));
       }
 
+      if (!groq) {
+        return res.status(503).json({ error: 'AI tidak tersedia. GROQ_API_KEY belum dikonfigurasi.' });
+      }
       const completion = await groq.chat.completions.create({
         messages: [
           {
@@ -521,6 +568,9 @@ async function startServer() {
         return res.json(JSON.parse(content));
       }
 
+      if (!groq) {
+        return res.status(503).json({ error: 'AI tidak tersedia. GROQ_API_KEY belum dikonfigurasi.' });
+      }
       const completion = await groq.chat.completions.create({
         messages: [
           {

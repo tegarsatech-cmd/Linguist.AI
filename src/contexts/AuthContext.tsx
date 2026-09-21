@@ -246,7 +246,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data, error } = await Promise.race([regPromise, timeoutPromise]);
       if (error) {
         if (/rate limit|over_email_send_rate_limit/i.test(error.message || "")) {
-          // Rate limit - try to login directly in case account already exists
+          // Rate limit - coba login langsung jika akun sudah ada
           const { data: loginData } = await supabase.auth.signInWithPassword({
             email: email.trim(),
             password,
@@ -260,15 +260,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
 
-      // Supabase returned a live session (auto-confirm enabled on dashboard)
+      // Supabase memberikan session langsung (auto-confirm aktif di dashboard)
       if (data?.session?.user) {
         setUser(data.session.user);
         return { requiresConfirmation: false, user: data.session.user };
       }
 
-      // No session returned — email confirmation is required by Supabase settings.
-      // Attempt an immediate sign-in to check if the account is actually usable.
+      // Tidak ada session — konfirmasi email dibutuhkan Supabase.
+      // Coba auto-confirm via server endpoint (butuh SUPABASE_SERVICE_ROLE_KEY di server).
       if (data?.user) {
+        try {
+          const confirmRes = await fetch('/api/auth/confirm-user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: data.user.id }),
+          });
+          const confirmJson = await confirmRes.json();
+          if (confirmJson.success) {
+            // Auto-confirm berhasil, langsung login
+            const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({
+              email: email.trim(),
+              password,
+            });
+            if (!loginErr && loginData?.session?.user) {
+              setUser(loginData.session.user);
+              return { requiresConfirmation: false, user: loginData.session.user };
+            }
+          }
+        } catch {
+          // ignore server error, fallback ke login langsung
+        }
+
+        // Fallback: coba login langsung (mungkin sudah bisa)
         const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({
           email: email.trim(),
           password,
@@ -279,7 +302,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // Fallback: account created but requires email confirmation from Supabase side
+      // Terakhir: akun dibuat tapi masih perlu konfirmasi email
       return {
         requiresConfirmation: false,
         pendingEmailConfirmation: true,
