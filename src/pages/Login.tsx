@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   LogIn,
@@ -239,13 +239,15 @@ export default function Login() {
       setLoading(true);
       try {
         const res = await register(cleanEmail, password);
-        if (res?.requiresConfirmation) {
-          setMode("verify");
+        if (res?.pendingEmailConfirmation) {
+          // Supabase masih memerlukan konfirmasi email — beri tahu user tapi tetap di login mode
           setSuccess(
-            `Pendaftaran berhasil! Kode verifikasi OTP telah dikirim ke ${cleanEmail}. Masukkan 6-digit kode OTP di bawah.`
+            `Akun berhasil dibuat! Silakan periksa email ${cleanEmail} untuk konfirmasi, lalu masuk.`
           );
+          setMode("login");
         } else {
-          setSuccess("Pendaftaran berhasil dan akun Anda langsung aktif!");
+          // Login langsung berhasil
+          setSuccess("Akun berhasil dibuat dan Anda sudah masuk!");
         }
         setPassword("");
         setConfirmPassword("");
@@ -676,32 +678,22 @@ export default function Login() {
               </div>
             )}
 
-            {/* Remember Me Checkbox & Verifikasi Shortcut (only in 'login' mode) */}
+            {/* Remember Me Checkbox (only in 'login' mode) */}
             {mode === "login" && (
-              <div className="flex items-center justify-between pt-1">
-                <div className="flex items-center gap-2">
-                  <input
-                    id="rememberMe"
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="w-4 h-4 rounded border-border-main bg-bg-nav text-brand-blue focus:ring-0 focus:ring-offset-0 cursor-pointer accent-brand-blue"
-                  />
-                  <label
-                    htmlFor="rememberMe"
-                    className="text-xs text-text-muted hover:text-text-dim cursor-pointer select-none"
-                  >
-                    Ingat email saya
-                  </label>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => switchMode("verify")}
-                  className="text-[11px] text-brand-blue hover:text-brand-blue/80 hover:underline transition-colors"
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  id="rememberMe"
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="w-4 h-4 rounded border-border-main bg-bg-nav text-brand-blue focus:ring-0 focus:ring-offset-0 cursor-pointer accent-brand-blue"
+                />
+                <label
+                  htmlFor="rememberMe"
+                  className="text-xs text-text-muted hover:text-text-dim cursor-pointer select-none"
                 >
-                  Verifikasi email
-                </button>
+                  Ingat email saya
+                </label>
               </div>
             )}
 

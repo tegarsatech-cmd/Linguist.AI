@@ -6,9 +6,7 @@ export interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<{ requiresConfirmation: boolean; user: User | null }>;
-  verifySignupOtp: (email: string, token: string) => Promise<void>;
-  resendConfirmationEmail: (email: string) => Promise<void>;
+  register: (email: string, password: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   verifyResetCode: (email: string, token: string) => Promise<void>;
   setSessionFromUrl: (rawUrlOrHash: string) => Promise<{ type?: string; user: User | null }>;
@@ -30,9 +28,6 @@ export function translateAuthError(error: any): string {
   if (/password should be at least 6 characters/i.test(msg)) {
     return "Kata sandi minimal harus terdiri dari 6 karakter.";
   }
-  if (/email not confirmed|email_not_confirmed/i.test(msg)) {
-    return "Email belum dikonfirmasi. Periksa kotak masuk atau spam email Anda untuk mengaktifkan akun.";
-  }
   if (/signup requires a valid password/i.test(msg)) {
     return "Silakan masukkan kata sandi yang valid.";
   }
@@ -40,7 +35,7 @@ export function translateAuthError(error: any): string {
     return "Gagal terhubung ke server. Periksa koneksi internet Anda.";
   }
   if (/token.*expired|invalid token|otp.*expired|token is invalid|recovery token|link is invalid/i.test(msg)) {
-    return "Kode verifikasi atau tautan telah kedaluwarsa atau tidak valid. Silakan periksa kembali atau minta kode/tautan baru.";
+    return "Kode verifikasi atau tautan telah kedaluwarsa atau tidak valid. Silakan periksa kembali atau minta kode baru.";
   }
   if (/user not found/i.test(msg)) {
     return "Akun dengan alamat email ini tidak ditemukan.";
@@ -250,26 +245,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const { data, error } = await Promise.race([regPromise, timeoutPromise]);
       if (error) {
-        // Jika pembatasan email sementara dari penyedia layanan terjadi, tetap arahkan pengguna ke verifikasi
         if (/rate limit|over_email_send_rate_limit/i.test(error.message || "")) {
-          return { requiresConfirmation: true, user: null };
+          // Rate limit - try to login directly in case account already exists
+          const { data: loginData } = await supabase.auth.signInWithPassword({
+            email: email.trim(),
+            password,
+          });
+          if (loginData?.session?.user) {
+            setUser(loginData.session.user);
+            return { requiresConfirmation: false, user: loginData.session.user };
+          }
+          throw error;
         }
         throw error;
       }
 
+      // Supabase returned a live session (auto-confirm enabled on dashboard)
       if (data?.session?.user) {
         setUser(data.session.user);
         return { requiresConfirmation: false, user: data.session.user };
       }
 
+      // No session returned — email confirmation is required by Supabase settings.
+      // Attempt an immediate sign-in to check if the account is actually usable.
+      if (data?.user) {
+        const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (!loginErr && loginData?.session?.user) {
+          setUser(loginData.session.user);
+          return { requiresConfirmation: false, user: loginData.session.user };
+        }
+      }
+
+      // Fallback: account created but requires email confirmation from Supabase side
       return {
-        requiresConfirmation: true,
+        requiresConfirmation: false,
+        pendingEmailConfirmation: true,
         user: data?.user || null,
       };
     } catch (error: any) {
-      if (/rate limit|over_email_send_rate_limit/i.test(error?.message || "")) {
-        return { requiresConfirmation: true, user: null };
-      }
       console.error("Register Error:", error);
       throw error;
     }
